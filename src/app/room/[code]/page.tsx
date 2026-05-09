@@ -3,148 +3,43 @@
 import { Suspense, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Channel } from "pusher-js";
-import type { RoomSettings, RoomState, Player } from "@/lib/types";
+import type { Player, RoomSettings, RoomState } from "@/lib/types";
 import { tryCatch } from "@/lib/result";
 import {
   ApiError,
   getRoom,
   joinRoom,
   leaveRoom,
-  readyRoom,
   seedUser,
   updateRoomSettings,
 } from "@/lib/api";
 import { getPusher } from "@/lib/pusher-client";
+import { randomGuestName } from "@/lib/guest-name";
+import { Button } from "@/components/jklm/button";
+import { Card } from "@/components/jklm/card";
+import { GameSetupCard } from "@/components/lobby/game-setup-card";
+import { JoinPrompt } from "@/components/lobby/join-prompt";
+import { PlayersCard } from "@/components/lobby/players-card";
+import { RoundSummaryCard } from "@/components/lobby/round-summary-card";
+import { ShareCard } from "@/components/lobby/share-card";
 
 interface RoomPageProps {
   params: Promise<{ code: string }>;
 }
 
-type Category = RoomSettings["category"];
-type Difficulty = RoomSettings["difficulty"];
-
-const MIN_PLAYERS = 1;
-const MAX_PLAYERS = 8;
-const MIN_ROUNDS = 1;
-const MAX_ROUNDS = 5;
-const MIN_TIMER = 30;
-const MAX_TIMER = 120;
-const TIMER_STEP = 10;
-const PROMPT_LEN_OPTIONS = [50, 100, 150, 200] as const;
-
-const CATEGORIES: { id: Category; label: string; emoji: string; color: string }[] = [
-  { id: "animals", label: "Animals", emoji: "🦊", color: "#bbf7d0" },
-  { id: "landmarks", label: "Landmarks", emoji: "🗽", color: "#38BDF8" },
-  { id: "food", label: "Food", emoji: "🍕", color: "#F472B6" },
-  { id: "celebrity", label: "Celebrities", emoji: "🌟", color: "#FACC15" },
-  { id: "logos", label: "Logos", emoji: "🏷️", color: "#fda4af" },
-];
-
-const DIFFICULTIES: { id: Difficulty; label: string; desc: string; color: string }[] = [
-  { id: "easy", label: "Easy", desc: "lower bar to qualify", color: "#bbf7d0" },
-  { id: "normal", label: "Normal", desc: "standard threshold", color: "#FACC15" },
-  { id: "hard", label: "Hard", desc: "must match closely", color: "#F472B6" },
-];
-
-function clamp(n: number, min: number, max: number): number {
-  if (Number.isNaN(n)) return min;
-  return Math.max(min, Math.min(max, Math.floor(n)));
-}
-
-function avatarUrl(seed: string): string {
-  return `https://api.dicebear.com/9.x/fun-emoji/svg?seed=${encodeURIComponent(seed)}&backgroundColor=fef3c7,fde68a,fef9c3,bbf7d0,bae6fd,fbcfe8`;
-}
-
-function CopyIcon({ done }: { done: boolean }) {
-  if (done) {
-    return (
-      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-        <polyline points="20 6 9 17 4 12" />
-      </svg>
-    );
-  }
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-    </svg>
-  );
-}
-
-function LinkIcon() {
-  return (
-    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-      <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-    </svg>
-  );
-}
-
-interface StepperProps {
-  value: number;
-  min: number;
-  max: number;
-  step?: number;
-  ariaLabel: string;
-  fillColor: string;
-  disabled?: boolean;
-  onChange: (n: number) => void;
-}
-
-function Stepper({ value, min, max, step = 1, ariaLabel, fillColor, disabled, onChange }: StepperProps) {
-  const bump = (delta: number) => {
-    if (disabled) return;
-    onChange(clamp(value + delta * step, min, max));
-  };
-  return (
-    <div className="inline-flex items-stretch overflow-hidden rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] shadow-chunky-sm">
-      <button
-        type="button"
-        onClick={() => bump(-1)}
-        disabled={disabled || value <= min}
-        aria-label={`Decrease ${ariaLabel}`}
-        className="press flex h-12 w-12 items-center justify-center border-r-[3px] border-[#0A0A0A] bg-white font-heading text-2xl font-bold cursor-pointer disabled:cursor-not-allowed disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/30"
-      >
-        −
-      </button>
-      <input
-        type="number"
-        inputMode="numeric"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(clamp(parseInt(e.target.value, 10), min, max))}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        className="h-12 w-20 text-center font-heading text-2xl font-bold outline-none disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
-        style={{ backgroundColor: disabled ? undefined : fillColor }}
-      />
-      <button
-        type="button"
-        onClick={() => bump(1)}
-        disabled={disabled || value >= max}
-        aria-label={`Increase ${ariaLabel}`}
-        className="press flex h-12 w-12 items-center justify-center border-l-[3px] border-[#0A0A0A] bg-white font-heading text-2xl font-bold cursor-pointer disabled:cursor-not-allowed disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/30"
-      >
-        +
-      </button>
-    </div>
-  );
-}
-
-interface RoomLobbyProps {
-  code: string;
-}
-
 type Phase = "loading" | "needs-name" | "ready";
 
-function randomGuestName(): string {
-  const n = Math.floor(Math.random() * 99) + 1;
-  return `Guest-${n.toString().padStart(2, "0")}`;
-}
+const FALLBACK_SETTINGS: RoomSettings = {
+  gameMode: "showdown",
+  rounds: 3,
+  maxPlayers: 8,
+  timer: 60,
+  promptMaxLength: 200,
+  category: "animals",
+  difficulty: "normal",
+};
 
-function RoomLobby({ code }: RoomLobbyProps) {
+function RoomLobby({ code }: { code: string }) {
   const router = useRouter();
 
   const [userId, setUserId] = useState<string>("");
@@ -152,8 +47,7 @@ function RoomLobby({ code }: RoomLobbyProps) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [fatalError, setFatalError] = useState<string | null>(null);
 
-  const [copiedCode, setCopiedCode] = useState<boolean>(false);
-  const [copiedLink, setCopiedLink] = useState<boolean>(false);
+  const [ready, setReady] = useState<boolean>(false);
   const [shareUrl, setShareUrl] = useState<string>("");
 
   const [joinName, setJoinName] = useState<string>("");
@@ -201,11 +95,11 @@ function RoomLobby({ code }: RoomLobbyProps) {
       const [getErr, getData] = await tryCatch(getRoom(code));
       if (cancelled) return;
       if (getErr) {
-        if (getErr instanceof ApiError && getErr.status === 404) {
-          setFatalError("Room not found.");
-        } else {
-          setFatalError("Could not load the room.");
-        }
+        setFatalError(
+          getErr instanceof ApiError && getErr.status === 404
+            ? "Room not found."
+            : "Could not load the room."
+        );
         return;
       }
 
@@ -248,8 +142,6 @@ function RoomLobby({ code }: RoomLobbyProps) {
     channel.bind("pusher:member_removed", onChange);
     channel.bind("player-joined", onChange);
     channel.bind("player-left", onChange);
-    channel.bind("player-ready", onChange);
-    channel.bind("round-starting", onChange);
     channel.bind("settings-updated", onChange);
 
     return () => {
@@ -262,14 +154,20 @@ function RoomLobby({ code }: RoomLobbyProps) {
     };
   }, [phase, code, refetchRoom]);
 
+  // Non-host: keep local settings mirrored from server.
+  useEffect(() => {
+    if (!roomState) return;
+    if (!isHost) {
+      setLocalSettings(roomState.settings);
+    }
+  }, [roomState, isHost]);
+
   // Host: debounced sync of local settings → server.
   useEffect(() => {
     if (!isHost) return;
     if (phase !== "ready") return;
     if (!localSettings || !roomState) return;
-    if (
-      JSON.stringify(localSettings) === JSON.stringify(roomState.settings)
-    ) {
+    if (JSON.stringify(localSettings) === JSON.stringify(roomState.settings)) {
       return;
     }
 
@@ -283,10 +181,21 @@ function RoomLobby({ code }: RoomLobbyProps) {
     return () => clearTimeout(timer);
   }, [localSettings, roomState, isHost, phase, code]);
 
-  const handleJoinSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const settings: RoomSettings = localSettings ?? FALLBACK_SETTINGS;
+  const players: Player[] = roomState?.players ?? [];
+  const allReady = players.length > 0 && players.every((p) => p.ready);
+  const canStart = isHost && allReady && players.length >= 2;
+
+  const update = <K extends keyof RoomSettings>(
+    key: K,
+    value: RoomSettings[K]
+  ) => {
+    if (!isHost) return;
+    setLocalSettings((s) => ({ ...(s ?? settings), [key]: value }));
+  };
+
+  const handleJoinSubmit = async (name: string) => {
     if (joinBusy) return;
-    const name = joinName.trim();
     if (!name) {
       setJoinError("Pick a name first");
       return;
@@ -311,52 +220,9 @@ function RoomLobby({ code }: RoomLobbyProps) {
     setPhase("ready");
   };
 
-  // Keep non-host's settings view in sync with server.
-  useEffect(() => {
-    if (!roomState) return;
-    if (!isHost) {
-      setLocalSettings(roomState.settings);
-    }
-  }, [roomState, isHost]);
-
-  const settings: RoomSettings = localSettings ?? {
-    gameMode: "showdown",
-    rounds: 3,
-    maxPlayers: 8,
-    timer: 60,
-    promptMaxLength: 200,
-    category: "animals",
-    difficulty: "normal",
-  };
-
-  const players: Player[] = roomState?.players ?? [];
-  const allReady = players.length > 0 && players.every((p) => p.ready);
-  const canStart = isHost && allReady && players.length >= 2;
-  const roomFull = players.length >= settings.maxPlayers;
-
-  const selectedCategory = CATEGORIES.find((c) => c.id === settings.category);
-  const selectedDifficulty = DIFFICULTIES.find(
-    (d) => d.id === settings.difficulty
-  );
-
-  const copy = async (text: string, setter: (v: boolean) => void): Promise<void> => {
-    const [err] = await tryCatch(navigator.clipboard.writeText(text));
-    if (err) {
-      console.error("Clipboard failed:", err);
-      return;
-    }
-    setter(true);
-    setTimeout(() => setter(false), 1500);
-  };
-
-  const update = <K extends keyof RoomSettings>(key: K, value: RoomSettings[K]) => {
-    if (!isHost) return;
-    setLocalSettings((s) => ({ ...(s ?? settings), [key]: value }));
-  };
-
   const handleStart = () => {
     if (!canStart) return;
-    router.push(`/room/${code}`);
+    console.log("Start round (mock — start endpoint pending)", { code, settings });
   };
 
   const handleLeave = async () => {
@@ -367,15 +233,17 @@ function RoomLobby({ code }: RoomLobbyProps) {
   if (fatalError) {
     return (
       <main className="flex flex-1 items-center justify-center px-4">
-        <div className="w-full max-w-md rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-8 text-center shadow-chunky-lg">
+        <Card className="w-full max-w-md p-8 text-center">
           <p className="font-heading text-2xl font-bold">{fatalError}</p>
-          <button
+          <Button
+            variant="primary"
+            size="md"
             onClick={() => router.push("/")}
-            className="press mt-6 rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] px-6 py-3 font-heading text-base font-bold uppercase tracking-wide shadow-chunky-sm cursor-pointer"
+            className="mt-6"
           >
             Back to start
-          </button>
-        </div>
+          </Button>
+        </Card>
       </main>
     );
   }
@@ -390,68 +258,15 @@ function RoomLobby({ code }: RoomLobbyProps) {
 
   if (phase === "needs-name") {
     return (
-      <main className="flex flex-1 items-center justify-center px-4 py-10">
-        <div className="w-full max-w-xl">
-          <div className="mb-8 text-center">
-            <div className="mb-2 text-5xl">⛳️</div>
-            <h1 className="font-heading text-3xl font-bold tracking-tight sm:text-4xl">
-              JOINING ROOM
-            </h1>
-            <div className="mt-2 font-heading text-5xl font-bold tracking-[0.3em]">
-              {code}
-            </div>
-          </div>
-
-          <form
-            onSubmit={handleJoinSubmit}
-            className="rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-8 shadow-chunky-lg sm:p-10"
-          >
-            <label className="mb-2 block font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/70">
-              your name
-            </label>
-            <input
-              value={joinName}
-              onChange={(e) => {
-                setJoinName(e.target.value.slice(0, 16));
-                setJoinError(null);
-              }}
-              maxLength={16}
-              autoFocus
-              disabled={joinBusy}
-              className="w-full rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] px-5 py-4 text-center font-heading text-2xl font-semibold outline-none transition focus:bg-white disabled:opacity-60"
-              placeholder="Guest-01"
-              aria-label="Player name"
-            />
-
-            <div className="mt-6 flex flex-col gap-3">
-              <button
-                type="submit"
-                disabled={joinBusy}
-                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer disabled:cursor-wait disabled:opacity-70"
-              >
-                {joinBusy ? "Joining…" : "Join Game"}
-              </button>
-              <button
-                type="button"
-                onClick={() => router.push("/")}
-                disabled={joinBusy}
-                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-white py-3 font-heading text-base font-semibold uppercase tracking-wide text-[#0A0A0A] shadow-chunky-sm cursor-pointer disabled:cursor-not-allowed"
-              >
-                Cancel
-              </button>
-            </div>
-
-            {joinError && (
-              <p
-                role="alert"
-                className="mt-4 rounded-xl border-[3px] border-[#0A0A0A] bg-[#F472B6] px-4 py-2 text-center font-heading text-sm font-semibold"
-              >
-                {joinError}
-              </p>
-            )}
-          </form>
-        </div>
-      </main>
+      <JoinPrompt
+        code={code}
+        initialName={joinName}
+        busy={joinBusy}
+        error={joinError}
+        onSubmit={handleJoinSubmit}
+        onCancel={() => router.push("/")}
+        onClearError={() => setJoinError(null)}
+      />
     );
   }
 
@@ -463,432 +278,58 @@ function RoomLobby({ code }: RoomLobbyProps) {
     );
   }
 
-  if (roomState.status === "playing") {
-    return (
-      <main className="flex flex-1 items-center justify-center px-4">
-        <div className="w-full max-w-md rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-8 text-center shadow-chunky-lg">
-          <p className="font-heading text-5xl">⛳️</p>
-          <h1 className="mt-4 font-heading text-3xl font-bold uppercase tracking-wide">
-            Playing Game
-          </h1>
-          <p className="mt-2 font-heading text-lg text-[#0A0A0A]/60">
-            Round {roomState.currentRound}
-          </p>
-          <button
-            onClick={() => router.push("/")}
-            className="press mt-6 rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] px-6 py-3 font-heading text-base font-bold uppercase tracking-wide shadow-chunky-sm cursor-pointer"
-          >
-            Back to start
-          </button>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className="flex flex-1 flex-col px-4 py-8">
       <div className="mx-auto w-full max-w-3xl">
         <div className="mb-6 flex items-center justify-between">
-          <button
-            onClick={handleLeave}
-            className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-white px-4 py-2 font-heading text-sm font-bold uppercase tracking-wide shadow-chunky-sm cursor-pointer"
-          >
+          <Button variant="neutral" size="sm" onClick={handleLeave}>
             ← Leave
-          </button>
+          </Button>
           <div className="font-heading text-xl">⛳️ PROMPT GOLF</div>
         </div>
 
-        {/* Code + share */}
-        <div className="mb-6 rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-6 text-center shadow-chunky-lg">
-          <p className="font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
-            room code
-          </p>
-          <div className="mt-2 font-heading text-7xl font-bold tracking-[0.3em] sm:text-8xl">
-            {code}
-          </div>
+        <ShareCard code={code} shareUrl={shareUrl} />
 
-          <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-stretch sm:justify-center">
-            <button
-              onClick={() => copy(code, setCopiedCode)}
-              className="press inline-flex items-center justify-center gap-2 rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FACC15] px-5 py-3 font-heading text-sm font-bold uppercase tracking-wide shadow-chunky-sm cursor-pointer sm:text-base"
-              aria-label="Copy room code"
-            >
-              <CopyIcon done={copiedCode} />
-              {copiedCode ? "Copied" : "Copy Code"}
-            </button>
-            <button
-              onClick={() => copy(shareUrl, setCopiedLink)}
-              className="press inline-flex items-center justify-center gap-2 rounded-2xl border-[3px] border-[#0A0A0A] bg-[#38BDF8] px-5 py-3 font-heading text-sm font-bold uppercase tracking-wide shadow-chunky-sm cursor-pointer sm:text-base"
-              aria-label="Copy share link"
-            >
-              <LinkIcon />
-              {copiedLink ? "Copied" : "Copy Link"}
-            </button>
-          </div>
-
-          <div className="mt-4 flex items-center justify-center">
-            <div
-              className="max-w-full truncate rounded-xl border-[3px] border-dashed border-[#0A0A0A]/40 bg-[#FFF8E7] px-3 py-2 font-mono text-xs text-[#0A0A0A]/70 sm:text-sm"
-              title={shareUrl}
-            >
-              {shareUrl || "…"}
-            </div>
-          </div>
-        </div>
-
-        {/* Settings */}
         {isHost ? (
-        <div className="mb-6 rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-6 shadow-chunky-lg">
-          <div className="mb-5 flex items-baseline justify-between">
-            <h2 className="font-heading text-2xl font-bold uppercase tracking-wide">
-              Game Setup
-            </h2>
-            <div className="flex items-center gap-2">
-              <span className="rounded-full border-[3px] border-[#0A0A0A] bg-[#22C55E] px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
-                Showdown
-              </span>
-            </div>
-          </div>
-
-          {/* Category */}
-          <fieldset className="mb-6">
-            <legend className="mb-2 font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
-              Category
-            </legend>
-            <div className="flex flex-wrap gap-2">
-              {CATEGORIES.map((c) => {
-                const selected = settings.category === c.id;
-                return (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => update("category", c.id)}
-                    disabled={!isHost}
-                    aria-pressed={selected}
-                    className={`press inline-flex items-center gap-2 rounded-full border-[3px] border-[#0A0A0A] px-4 py-2 font-heading text-sm font-bold uppercase tracking-wide cursor-pointer disabled:cursor-not-allowed ${
-                      selected ? "shadow-chunky-sm" : "bg-white opacity-70 hover:opacity-100"
-                    }`}
-                    style={selected ? { backgroundColor: c.color } : undefined}
-                  >
-                    <span aria-hidden="true">{c.emoji}</span>
-                    <span>{c.label}</span>
-                    {selected && <span aria-hidden="true">✓</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </fieldset>
-
-          <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-            <fieldset>
-              <div className="mb-2 flex items-baseline justify-between">
-                <legend className="font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
-                  Rounds
-                </legend>
-                <span className="font-heading text-xs text-[#0A0A0A]/50">
-                  {MIN_ROUNDS}–{MAX_ROUNDS}
-                </span>
-              </div>
-              <Stepper
-                value={settings.rounds}
-                min={MIN_ROUNDS}
-                max={MAX_ROUNDS}
-                ariaLabel="rounds"
-                fillColor="#38BDF8"
-                disabled={!isHost}
-                onChange={(n) => update("rounds", n)}
-              />
-            </fieldset>
-
-            <fieldset>
-              <div className="mb-2 flex items-baseline justify-between">
-                <legend className="font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
-                  Max players
-                </legend>
-                <span className="font-heading text-xs text-[#0A0A0A]/50">
-                  {MIN_PLAYERS}–{MAX_PLAYERS}
-                </span>
-              </div>
-              <Stepper
-                value={settings.maxPlayers}
-                min={MIN_PLAYERS}
-                max={MAX_PLAYERS}
-                ariaLabel="max players"
-                fillColor="#22C55E"
-                disabled={!isHost}
-                onChange={(n) => update("maxPlayers", n)}
-              />
-            </fieldset>
-
-            <fieldset>
-              <div className="mb-2 flex items-baseline justify-between">
-                <legend className="font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
-                  Round timer
-                </legend>
-                <span className="font-heading text-xs text-[#0A0A0A]/50">
-                  {MIN_TIMER}–{MAX_TIMER}s
-                </span>
-              </div>
-              <Stepper
-                value={settings.timer}
-                min={MIN_TIMER}
-                max={MAX_TIMER}
-                step={TIMER_STEP}
-                ariaLabel="round timer in seconds"
-                fillColor="#FACC15"
-                disabled={!isHost}
-                onChange={(n) => update("timer", n)}
-              />
-            </fieldset>
-
-            <fieldset>
-              <div className="mb-2 flex items-baseline justify-between">
-                <legend className="font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
-                  Prompt cap
-                </legend>
-                <span className="font-heading text-xs text-[#0A0A0A]/50">
-                  chars
-                </span>
-              </div>
-              <div className="inline-flex rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] p-1 shadow-chunky-sm">
-                {PROMPT_LEN_OPTIONS.map((p) => {
-                  const selected = settings.promptMaxLength === p;
-                  return (
-                    <button
-                      key={p}
-                      type="button"
-                      onClick={() => update("promptMaxLength", p)}
-                      disabled={!isHost}
-                      aria-pressed={selected}
-                      className={`min-w-12 rounded-xl px-3 py-2 font-heading text-base font-bold cursor-pointer disabled:cursor-not-allowed ${
-                        selected
-                          ? "bg-[#F472B6] border-[3px] border-[#0A0A0A]"
-                          : "border-[3px] border-transparent text-[#0A0A0A]/60 hover:text-[#0A0A0A]"
-                      }`}
-                    >
-                      {p}
-                    </button>
-                  );
-                })}
-              </div>
-            </fieldset>
-          </div>
-
-          {/* Difficulty */}
-          <fieldset className="mt-6">
-            <legend className="mb-2 font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
-              Difficulty
-            </legend>
-            <div className="grid grid-cols-3 gap-2">
-              {DIFFICULTIES.map((d) => {
-                const selected = settings.difficulty === d.id;
-                return (
-                  <button
-                    key={d.id}
-                    type="button"
-                    onClick={() => update("difficulty", d.id)}
-                    disabled={!isHost}
-                    aria-pressed={selected}
-                    className={`press rounded-2xl border-[3px] border-[#0A0A0A] p-3 text-left transition cursor-pointer disabled:cursor-not-allowed ${
-                      selected ? "shadow-chunky-sm" : "bg-white opacity-70 hover:opacity-100"
-                    }`}
-                    style={selected ? { backgroundColor: d.color } : undefined}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div className="font-heading text-base font-bold uppercase tracking-wide">
-                        {d.label}
-                      </div>
-                      {selected && (
-                        <span className="rounded-full border-2 border-[#0A0A0A] bg-white px-1.5 py-0 font-heading text-[9px] font-bold uppercase tracking-wide">
-                          ✓
-                        </span>
-                      )}
-                    </div>
-                    <p className="mt-1 font-sans text-xs leading-snug text-[#0A0A0A]/70">
-                      {d.desc}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-          </fieldset>
-        </div>
+          <GameSetupCard settings={settings} onChange={update} />
         ) : (
-        <div className="mb-6 rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-6 shadow-chunky-lg">
-          <div className="mb-4 flex items-baseline justify-between">
-            <h2 className="font-heading text-2xl font-bold uppercase tracking-wide">
-              Round Settings
-            </h2>
-            <span className="rounded-full border-[3px] border-[#0A0A0A] bg-[#22C55E] px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
-              Showdown
-            </span>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <div
-              className="col-span-2 rounded-2xl border-[3px] border-[#0A0A0A] p-3 shadow-chunky-sm"
-              style={{ backgroundColor: selectedCategory?.color ?? "#FFF8E7" }}
-            >
-              <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-[#0A0A0A]/60">
-                Category
-              </div>
-              <div className="mt-1 font-heading text-lg font-bold">
-                <span aria-hidden="true">{selectedCategory?.emoji} </span>
-                {selectedCategory?.label ?? settings.category}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border-[3px] border-[#0A0A0A] bg-[#38BDF8] p-3 shadow-chunky-sm">
-              <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-[#0A0A0A]/60">
-                Rounds
-              </div>
-              <div className="mt-1 font-heading text-2xl font-bold">
-                {settings.rounds}
-              </div>
-            </div>
-
-            <div className="rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FACC15] p-3 shadow-chunky-sm">
-              <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-[#0A0A0A]/60">
-                Round timer
-              </div>
-              <div className="mt-1 font-heading text-2xl font-bold">
-                {settings.timer}s
-              </div>
-            </div>
-
-            <div className="rounded-2xl border-[3px] border-[#0A0A0A] bg-[#F472B6] p-3 shadow-chunky-sm">
-              <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-[#0A0A0A]/60">
-                Prompt cap
-              </div>
-              <div className="mt-1 font-heading text-2xl font-bold">
-                {settings.promptMaxLength}
-              </div>
-              <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-[#0A0A0A]/60">
-                chars
-              </div>
-            </div>
-
-            <div
-              className="rounded-2xl border-[3px] border-[#0A0A0A] p-3 shadow-chunky-sm"
-              style={{ backgroundColor: selectedDifficulty?.color ?? "#FFF8E7" }}
-            >
-              <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-[#0A0A0A]/60">
-                Difficulty
-              </div>
-              <div className="mt-1 font-heading text-lg font-bold uppercase tracking-wide">
-                {selectedDifficulty?.label ?? settings.difficulty}
-              </div>
-            </div>
-          </div>
-
-          <p className="mt-4 text-center font-heading text-xs text-[#0A0A0A]/50">
-            host picks the round settings
-          </p>
-        </div>
+          <RoundSummaryCard settings={settings} />
         )}
 
-        {/* Players */}
-        <div className="mb-6 rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-6 shadow-chunky-lg">
-          <div className="mb-4 flex items-baseline justify-between">
-            <h2 className="font-heading text-2xl font-bold uppercase tracking-wide">
-              Players
-            </h2>
-            <span className="font-heading text-sm font-semibold text-[#0A0A0A]/60">
-              {players.length} / {settings.maxPlayers}
-              {roomFull && (
-                <span className="ml-2 rounded-full border-2 border-[#0A0A0A] bg-[#F472B6] px-2 py-0.5 text-[10px] uppercase">
-                  Full
-                </span>
-              )}
-            </span>
-          </div>
+        <PlayersCard
+          players={players}
+          hostId={roomState.hostId}
+          selfId={userId}
+          maxPlayers={settings.maxPlayers}
+        />
 
-          <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-            {players.map((p) => {
-              const isYou = p.userId === userId;
-              const isPlayerHost = p.userId === roomState.hostId;
-              return (
-                <li
-                  key={p.userId}
-                  className={`relative rounded-2xl border-[3px] border-[#0A0A0A] p-3 shadow-chunky-sm ${
-                    p.ready ? "bg-[#bbf7d0]" : "bg-[#FFF8E7]"
-                  } ${!p.connected ? "opacity-60" : ""}`}
-                >
-                  <div className="flex flex-col items-center gap-2">
-                    <div className="h-16 w-16 overflow-hidden rounded-full border-[3px] border-[#0A0A0A] bg-white">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img
-                        src={avatarUrl(p.avatarSeed || p.userId)}
-                        alt={`${p.name} avatar`}
-                        className="h-full w-full"
-                      />
-                    </div>
-                    <div className="w-full truncate text-center font-heading text-sm font-bold">
-                      {p.name}
-                      {isYou && <span className="ml-1 text-[#0A0A0A]/50">(you)</span>}
-                    </div>
-                    <div className="flex h-5 flex-wrap items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-wide">
-                      {isPlayerHost && (
-                        <span className="rounded-full border-2 border-[#0A0A0A] bg-[#FACC15] px-2 py-0.5">
-                          Host
-                        </span>
-                      )}
-                      {p.role === "spectator" && (
-                        <span className="rounded-full border-2 border-[#0A0A0A] bg-[#38BDF8] px-2 py-0.5">
-                          Spec
-                        </span>
-                      )}
-                      {p.ready ? (
-                        <span className="rounded-full border-2 border-[#0A0A0A] bg-[#22C55E] px-2 py-0.5">
-                          Ready
-                        </span>
-                      ) : (
-                        <span className="rounded-full border-2 border-[#0A0A0A] bg-white px-2 py-0.5 text-[#0A0A0A]/60">
-                          Waiting
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-
-        {/* CTA */}
         <div className="flex flex-col gap-3">
           {!isHost && (
-            <button
-              onClick={async () => {
-                const me = players.find((p) => p.userId === userId)
-                const [err] = await tryCatch(readyRoom(code, !me?.ready))
-                if (err) console.error("Failed to toggle ready:", err)
-              }}
-              className={`press rounded-2xl border-[3px] border-[#0A0A0A] py-5 font-heading text-2xl font-bold uppercase tracking-wide shadow-chunky cursor-pointer ${
-                players.find((p) => p.userId === userId)?.ready
-                  ? "bg-[#22C55E]"
-                  : "bg-[#FACC15]"
-              }`}
+            <Button
+              variant={ready ? "primary" : "secondary"}
+              size="lg"
+              full
+              onClick={() => setReady((r) => !r)}
             >
-              {players.find((p) => p.userId === userId)?.ready
-                ? "✓ Ready"
-                : "Tap to Ready Up"}
-            </button>
+              {ready ? "✓ Ready" : "Tap to Ready Up"}
+            </Button>
           )}
           {isHost && (
-            <button
+            <Button
+              variant="primary"
+              size="lg"
+              full
               onClick={handleStart}
               disabled={!canStart}
-              className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide shadow-chunky cursor-pointer disabled:cursor-not-allowed disabled:bg-[#0A0A0A]/10 disabled:text-[#0A0A0A]/40 disabled:shadow-chunky-sm"
             >
               {players.length < 2
                 ? "Waiting for players…"
                 : !allReady
                 ? "Waiting on ready up…"
                 : "Start Round"}
-            </button>
+            </Button>
           )}
-          <p className="text-center font-heading text-xs text-[#0A0A0A]/50">
+          <p className="text-center font-heading text-xs text-ink/50">
             share the room code or link so friends can join
           </p>
         </div>
