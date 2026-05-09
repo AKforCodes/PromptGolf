@@ -17,12 +17,23 @@ interface Player {
 
 type GameMode = "showdown" | "holeinone" | "whisper";
 type Category = "landmark" | "food" | "nature" | "characters";
-type MaxPlayers = 4 | 6 | 8;
+type Difficulty = "easy" | "normal" | "hard";
+type RoundTimer = 30 | 60 | 90;
+type PromptCap = 50 | 100 | 200;
+
+const MIN_PLAYERS = 2;
+const MAX_PLAYERS = 8;
+const MIN_ROUNDS = 1;
+const MAX_ROUNDS = 7;
 
 interface RoomSettings {
   mode: GameMode;
   categories: Category[];
-  maxPlayers: MaxPlayers;
+  maxPlayers: number;
+  rounds: number;
+  timer: RoundTimer;
+  promptCap: PromptCap;
+  difficulty: Difficulty;
 }
 
 const MOCK_REMOTE_PLAYERS: Omit<Player, "isYou">[] = [
@@ -44,7 +55,23 @@ const CATEGORIES: { id: Category; label: string; emoji: string; color: string }[
   { id: "characters", label: "Characters", emoji: "🦸", color: "#FACC15" },
 ];
 
-const MAX_PLAYER_OPTIONS: MaxPlayers[] = [4, 6, 8];
+function clampMax(n: number): number {
+  if (Number.isNaN(n)) return MIN_PLAYERS;
+  return Math.max(MIN_PLAYERS, Math.min(MAX_PLAYERS, Math.floor(n)));
+}
+
+function clampRounds(n: number): number {
+  if (Number.isNaN(n)) return MIN_ROUNDS;
+  return Math.max(MIN_ROUNDS, Math.min(MAX_ROUNDS, Math.floor(n)));
+}
+
+const TIMER_OPTIONS: RoundTimer[] = [30, 60, 90];
+const PROMPT_CAP_OPTIONS: PromptCap[] = [50, 100, 200];
+const DIFFICULTY_OPTIONS: { id: Difficulty; label: string; desc: string; color: string }[] = [
+  { id: "easy", label: "Easy", desc: "lower bar to qualify", color: "#bbf7d0" },
+  { id: "normal", label: "Normal", desc: "standard threshold", color: "#FACC15" },
+  { id: "hard", label: "Hard", desc: "must match closely", color: "#F472B6" },
+];
 
 function avatarUrl(seed: string): string {
   return `https://api.dicebear.com/9.x/fun-emoji/svg?seed=${encodeURIComponent(seed)}&backgroundColor=fef3c7,fde68a,fef9c3,bbf7d0,bae6fd,fbcfe8`;
@@ -90,6 +117,10 @@ function RoomLobby({ code }: { code: string }) {
     mode: "showdown",
     categories: ["landmark", "nature", "characters"],
     maxPlayers: 6,
+    rounds: 3,
+    timer: 60,
+    promptCap: 100,
+    difficulty: "normal",
   });
 
   useEffect(() => {
@@ -169,9 +200,34 @@ function RoomLobby({ code }: { code: string }) {
     setSettings((s) => ({ ...s, mode }));
   };
 
-  const setMaxPlayers = (n: MaxPlayers) => {
+  const setMaxPlayers = (n: number) => {
     if (!isHost) return;
-    setSettings((s) => ({ ...s, maxPlayers: n }));
+    setSettings((s) => ({ ...s, maxPlayers: clampMax(n) }));
+  };
+
+  const bumpMax = (delta: number) => {
+    if (!isHost) return;
+    setSettings((s) => ({ ...s, maxPlayers: clampMax(s.maxPlayers + delta) }));
+  };
+
+  const bumpRounds = (delta: number) => {
+    if (!isHost) return;
+    setSettings((s) => ({ ...s, rounds: clampRounds(s.rounds + delta) }));
+  };
+
+  const setTimer = (t: RoundTimer) => {
+    if (!isHost) return;
+    setSettings((s) => ({ ...s, timer: t }));
+  };
+
+  const setPromptCap = (p: PromptCap) => {
+    if (!isHost) return;
+    setSettings((s) => ({ ...s, promptCap: p }));
+  };
+
+  const setDifficulty = (d: Difficulty) => {
+    if (!isHost) return;
+    setSettings((s) => ({ ...s, difficulty: d }));
   };
 
   return (
@@ -332,26 +388,188 @@ function RoomLobby({ code }: { code: string }) {
 
           {/* Max players */}
           <fieldset>
+            <div className="mb-2 flex items-baseline justify-between">
+              <legend className="font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
+                Max players
+              </legend>
+              <span className="font-heading text-xs text-[#0A0A0A]/50">
+                {MIN_PLAYERS}–{MAX_PLAYERS}
+              </span>
+            </div>
+            <div className="inline-flex items-stretch overflow-hidden rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] shadow-chunky-sm">
+              <button
+                type="button"
+                onClick={() => bumpMax(-1)}
+                disabled={!isHost || settings.maxPlayers <= MIN_PLAYERS}
+                aria-label="Decrease max players"
+                className="press flex h-12 w-12 items-center justify-center border-r-[3px] border-[#0A0A0A] bg-white font-heading text-2xl font-bold cursor-pointer disabled:cursor-not-allowed disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/30"
+              >
+                −
+              </button>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={MIN_PLAYERS}
+                max={MAX_PLAYERS}
+                value={settings.maxPlayers}
+                onChange={(e) => setMaxPlayers(parseInt(e.target.value, 10))}
+                disabled={!isHost}
+                aria-label="Max players"
+                className="h-12 w-16 bg-[#22C55E] text-center font-heading text-2xl font-bold outline-none disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              />
+              <button
+                type="button"
+                onClick={() => bumpMax(1)}
+                disabled={!isHost || settings.maxPlayers >= MAX_PLAYERS}
+                aria-label="Increase max players"
+                className="press flex h-12 w-12 items-center justify-center border-l-[3px] border-[#0A0A0A] bg-white font-heading text-2xl font-bold cursor-pointer disabled:cursor-not-allowed disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/30"
+              >
+                +
+              </button>
+            </div>
+          </fieldset>
+
+          {/* Rounds */}
+          <fieldset className="mt-6">
+            <div className="mb-2 flex items-baseline justify-between">
+              <legend className="font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
+                Rounds
+              </legend>
+              <span className="font-heading text-xs text-[#0A0A0A]/50">
+                {MIN_ROUNDS}–{MAX_ROUNDS}
+              </span>
+            </div>
+            <div className="inline-flex items-stretch overflow-hidden rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] shadow-chunky-sm">
+              <button
+                type="button"
+                onClick={() => bumpRounds(-1)}
+                disabled={!isHost || settings.rounds <= MIN_ROUNDS}
+                aria-label="Decrease rounds"
+                className="press flex h-12 w-12 items-center justify-center border-r-[3px] border-[#0A0A0A] bg-white font-heading text-2xl font-bold cursor-pointer disabled:cursor-not-allowed disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/30"
+              >
+                −
+              </button>
+              <input
+                type="number"
+                inputMode="numeric"
+                min={MIN_ROUNDS}
+                max={MAX_ROUNDS}
+                value={settings.rounds}
+                onChange={(e) =>
+                  setSettings((s) => ({
+                    ...s,
+                    rounds: clampRounds(parseInt(e.target.value, 10)),
+                  }))
+                }
+                disabled={!isHost}
+                aria-label="Number of rounds"
+                className="h-12 w-16 bg-[#38BDF8] text-center font-heading text-2xl font-bold outline-none disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/40 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
+              />
+              <button
+                type="button"
+                onClick={() => bumpRounds(1)}
+                disabled={!isHost || settings.rounds >= MAX_ROUNDS}
+                aria-label="Increase rounds"
+                className="press flex h-12 w-12 items-center justify-center border-l-[3px] border-[#0A0A0A] bg-white font-heading text-2xl font-bold cursor-pointer disabled:cursor-not-allowed disabled:bg-[#0A0A0A]/5 disabled:text-[#0A0A0A]/30"
+              >
+                +
+              </button>
+            </div>
+          </fieldset>
+
+          {/* Timer + prompt cap (segments) */}
+          <div className="mt-6 grid grid-cols-1 gap-6 sm:grid-cols-2">
+            <fieldset>
+              <legend className="mb-2 font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
+                Round timer
+              </legend>
+              <div className="inline-flex rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] p-1 shadow-chunky-sm">
+                {TIMER_OPTIONS.map((t) => {
+                  const selected = settings.timer === t;
+                  return (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setTimer(t)}
+                      disabled={!isHost}
+                      aria-pressed={selected}
+                      className={`min-w-16 rounded-xl px-4 py-2 font-heading text-base font-bold cursor-pointer disabled:cursor-not-allowed ${
+                        selected
+                          ? "bg-[#22C55E] border-[3px] border-[#0A0A0A]"
+                          : "border-[3px] border-transparent text-[#0A0A0A]/60 hover:text-[#0A0A0A]"
+                      }`}
+                    >
+                      {t}s
+                    </button>
+                  );
+                })}
+              </div>
+            </fieldset>
+
+            <fieldset>
+              <legend className="mb-2 font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
+                Prompt cap
+              </legend>
+              <div className="inline-flex rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] p-1 shadow-chunky-sm">
+                {PROMPT_CAP_OPTIONS.map((p) => {
+                  const selected = settings.promptCap === p;
+                  return (
+                    <button
+                      key={p}
+                      type="button"
+                      onClick={() => setPromptCap(p)}
+                      disabled={!isHost}
+                      aria-pressed={selected}
+                      className={`min-w-16 rounded-xl px-4 py-2 font-heading text-base font-bold cursor-pointer disabled:cursor-not-allowed ${
+                        selected
+                          ? "bg-[#22C55E] border-[3px] border-[#0A0A0A]"
+                          : "border-[3px] border-transparent text-[#0A0A0A]/60 hover:text-[#0A0A0A]"
+                      }`}
+                    >
+                      {p}
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1 font-heading text-xs text-[#0A0A0A]/50">
+                max chars per prompt
+              </p>
+            </fieldset>
+          </div>
+
+          {/* Difficulty */}
+          <fieldset className="mt-6">
             <legend className="mb-2 font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/60">
-              Max players
+              Difficulty
             </legend>
-            <div className="inline-flex rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] p-1 shadow-chunky-sm">
-              {MAX_PLAYER_OPTIONS.map((n) => {
-                const selected = settings.maxPlayers === n;
+            <div className="grid grid-cols-3 gap-2">
+              {DIFFICULTY_OPTIONS.map((d) => {
+                const selected = settings.difficulty === d.id;
                 return (
                   <button
-                    key={n}
+                    key={d.id}
                     type="button"
-                    onClick={() => setMaxPlayers(n)}
+                    onClick={() => setDifficulty(d.id)}
                     disabled={!isHost}
                     aria-pressed={selected}
-                    className={`min-w-14 rounded-xl px-4 py-2 font-heading text-base font-bold transition cursor-pointer disabled:cursor-not-allowed ${
-                      selected
-                        ? "bg-[#22C55E] border-[3px] border-[#0A0A0A]"
-                        : "border-[3px] border-transparent text-[#0A0A0A]/60 hover:text-[#0A0A0A]"
+                    className={`press rounded-2xl border-[3px] border-[#0A0A0A] p-3 text-left transition cursor-pointer disabled:cursor-not-allowed ${
+                      selected ? "shadow-chunky-sm" : "bg-white opacity-70 hover:opacity-100"
                     }`}
+                    style={selected ? { backgroundColor: d.color } : undefined}
                   >
-                    {n}
+                    <div className="flex items-center justify-between">
+                      <div className="font-heading text-base font-bold uppercase tracking-wide">
+                        {d.label}
+                      </div>
+                      {selected && (
+                        <span className="rounded-full border-2 border-[#0A0A0A] bg-white px-1.5 py-0 font-heading text-[9px] font-bold uppercase tracking-wide">
+                          ✓
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-1 font-sans text-xs leading-snug text-[#0A0A0A]/70">
+                      {d.desc}
+                    </p>
                   </button>
                 );
               })}
