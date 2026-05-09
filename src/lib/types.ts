@@ -61,19 +61,17 @@ export const RoomState = z.object({
   currentRound: z.number(),
   targetId: z.string().nullable(),
   seed: z.number().nullable(),
-  // Round-active fields. Populated during status === "generating"|"countdown"|"playing"|"reveal", null otherwise.
-  // targetEmbedding is the 768d CLIP vector cached at round-start so per-submission scoring is one CLIP call + a JS cosine.
+  // Round-active fields. Populated during status === "generating"|"playing"|"voting"|"reveal", null otherwise.
   // targetPrompt is server-only — never broadcast over Pusher until the reveal payload.
   targetImageUrl: z.string().nullable().default(null),
   targetPrompt: z.string().nullable().default(null),
-  targetEmbedding: z.array(z.number()).nullable().default(null),
-  // Cumulative score per player across rounds: CLIP points (60 × best similarity) + vote points.
-  // DNFs contribute 0 CLIP but can still receive vote points.
+  // Cumulative score per player across rounds: vote points only (CLIP scoring
+  // dropped 2026-05-09; target image now serves as a shared anchor for voters).
   scores: z.record(z.string(), z.number()).default({}),
   // Player picks for the current round: userId → attemptId. The picked attempt
-  // is the player's "final submission" — it's what gets scored for CLIP and
-  // shown to voters. Cleared on each new round. If a player doesn't pick by
-  // playing → voting transition, the server falls back to their best attempt.
+  // is shown to voters as the player's final submission. Cleared on each new
+  // round. If a player doesn't pick by the playing → voting transition, the
+  // server falls back to their last-submitted attempt.
   picks: z.record(z.string(), z.string()).default({}),
   // Server-stamped deadline for the current phase (epoch ms). Clients render
   // a countdown to this value and auto-fire `advance` when it elapses.

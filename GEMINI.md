@@ -2,7 +2,7 @@
 
 # PromptGolf
 
-Jackbox-style party game. Players see a target image, race to write prompts that recreate it via FLUX schnell, then pick their best attempt to submit. Each round players vote on each others' final attempts (bad/ok/good/excellent). Round score = CLIP similarity points + vote points; cumulative highest score wins. 24hr hackathon, team of 3, demo-first.
+Jackbox-style party game. Players see a target image, race to write prompts that recreate it via FLUX schnell, then pick their best attempt to submit. Each round players vote on each others' final attempts (bad/ok/good/excellent). Round score = vote points received; cumulative highest score wins. The target image serves as a shared anchor for voters — there's no algorithmic scoring against it. 24hr hackathon, team of 3, demo-first.
 
 ## Locked Decisions
 
@@ -10,12 +10,12 @@ Jackbox-style party game. Players see a target image, race to write prompts that
 |---|---|
 | Game mode v1 | Showdown only (multiplayer race, configurable timer) |
 | Modality | Image targets, FLUX schnell @ 4 steps, fixed seed per round |
-| Scoring | Points-based per round, cumulative across rounds, highest total wins. **CLIP component** (qualified attempts only): `Math.round(60 × similarity)` → max 60 pts/round, 0 for DNFs. **Vote component**: each vote received → bad=0, ok=3, good=6, excellent=10 pts. Spec example: 1.0 sim + 4 excellents = 60 + 40 = 100 pts. |
-| Qualifying threshold | CLIP ≥0.88. Calibrated 2026-05-09 against Replicate `andreasjansson/clip-features` (768d openai/clip-vit-large-patch14): `wrong` baseline ≈0.85, `fuzzy` qualifying ≈0.98. Image-image cosine has a high floor — the threshold is a gate, not the score itself. Configurable per category later. |
-| Tiebreak ladder | Cumulative score → CLIP-only subtotal → char count → token count → submission timestamp. Used only when totals literally tie. |
-| Attempts per round | Host-configurable 1–5, default 3. Players submit multiple, then **pick** which one is their "final" submission for that round (affects both CLIP score and the voting carousel). |
-| Picks | Player-driven before voting starts. Fallback chain if no pick: highest-similarity qualified → highest-similarity overall. |
-| CLIP location | Server-side via Replicate `andreasjansson/clip-features` (version-pinned). Returns 768-dim embedding per image; cosine computed in JS. fal CLIP was investigated and dropped — only fal endpoint exposing image embeddings is SAM-3, which returns a 1.3M-dim segmentation feature map that doesn't discriminate semantic similarity. |
+| Scoring | Vote-only per round, cumulative across rounds, highest total wins. Each vote received → bad=0, ok=3, good=6, excellent=10 pts. Spec example: 4 excellents from voters = 40 pts. CLIP scoring was investigated and dropped 2026-05-09 — target image is now a shared anchor for voters, not an algorithmic reference. |
+| Tiebreak ladder | Cumulative score → char count → token count → submission timestamp. Used only when totals literally tie (`tiebreak()` in `lib/scoring.ts`). |
+| Attempts per round | Host-configurable 1–5, default 3. Players submit multiple, then **pick** which one is their "final" submission shown to voters. |
+| Picks | Player-driven before voting starts. Fallback if no pick: last-submitted attempt (most recent `submittedAt`). |
+| Vestigial fields | `Attempt.similarity` and `Attempt.qualified` always 0/false. `RoomSettings.difficulty` ignored by scoring. Kept for forward-compat in case CLIP returns later. |
+| CLIP location | DROPPED 2026-05-09. Replicate `andreasjansson/clip-features` was previously used for image-similarity scoring; replaced by pure player voting. `lib/replicate.ts` deleted. The `replicate` npm package + `REPLICATE_API_TOKEN` env are unused but left in place for easy revert. |
 | Rounds per game | 1–5, default 3 |
 | Max players | 1–8, default 8 |
 | Prompt max length | 50–200 chars, default 200 |
@@ -36,7 +36,7 @@ Jackbox-style party game. Players see a target image, race to write prompts that
 - State: Upstash Redis (room state, attempts, leaderboard)
 - Realtime: Pusher Channels
 - Image gen: fal.ai FLUX schnell
-- Scoring: Replicate `andreasjansson/clip-features` (server-side, version-pinned)
+- Scoring: pure player voting (no CLIP — dropped 2026-05-09)
 - Animation: Framer Motion
 - Sound: Howler.js
 - Avatars: DiceBear API (URL-only)
@@ -79,10 +79,9 @@ src/
     redis.ts          # Upstash client
     pusher.ts         # client + server
     fal.ts            # FLUX gen wrapper (target image + per-submission candidate gen)
-    replicate.ts      # CLIP embedding wrapper (andreasjansson/clip-features, version-pinned)
     rooms.ts          # room state CRUD
     targets.ts        # category lookup → FLUX prompt + seed picker
-    scoring.ts        # cosine, qualifies, tiebreak, clipPoints, VOTE_POINTS, selectFinalAttempts, awardRoundScores
+    scoring.ts        # tiebreak, VOTE_POINTS, selectFinalAttempts, awardRoundScores (vote-only)
     session.ts        # cookie-based playerId mint + read
     devBot.ts         # fake player for testing
   components/
@@ -145,8 +144,7 @@ type RoomState = {
   seed: number | null;                    // FLUX seed for current round
   targetImageUrl: string | null;          // safe to broadcast
   targetPrompt: string | null;            // SECRET — server-only until reveal
-  targetEmbedding: number[] | null;       // 768d CLIP vector cached at round start
-  scores: Record<string, number>;         // userId → cumulative points (CLIP + votes)
+  scores: Record<string, number>;         // userId → cumulative vote points
   picks: Record<string, string>;          // userId → attemptId for current round; cleared on next round
   phaseEndsAt: number | null;             // server-stamped epoch ms; clients render countdown to this
   createdAt: number;
@@ -157,8 +155,8 @@ type Attempt = {
   userId: string;
   prompt: string;
   imageUrl: string;      // candidate image returned by FLUX
-  similarity: number;    // CLIP cosine vs targetEmbedding
-  qualified: boolean;    // similarity >= difficulty threshold
+  similarity: number;    // VESTIGIAL — always 0 since CLIP scoring was dropped
+  qualified: boolean;    // VESTIGIAL — always false since CLIP scoring was dropped
   chars: number;
   tokens: number;        // ceil(chars / 4)
   submittedAt: number;
@@ -190,7 +188,6 @@ type Vote = {
 - **Role assignment:** first `settings.maxPlayers` joiners get `prompter`, rest get `spectator` — checked in `joinRoom()`.
 - **Attempts/votes in separate keys** to avoid rewriting full RoomState on every submission/vote (each round can hit 8 × 3 = 24 attempts plus 8 × 7 = 56 votes).
 - **`picks` inline** because they're tiny (≤8 entries, ~30 bytes each) and read together with the rest of RoomState during the voting → reveal transition.
-- **`targetEmbedding` inline:** ~6KB JSON when populated, but read once per submission to compute cosine — co-locating with the rest of room state avoids an extra round-trip.
 - **`phaseEndsAt` server-stamped:** clients can't lie about timer expiry. Server-side `advance` rejects early calls with 409 + the real `phaseEndsAt`.
 
 ## API + Pusher: How real-time works
@@ -273,10 +270,10 @@ This means the lobby roster updates itself — no custom join/leave events neede
 2. **Create lobby.** Host picks settings (rounds, max players, timer, prompt cap, category, difficulty, **attempts per round**) → `POST /api/v1/rooms` → 4-letter code → `/room/ABCD`.
 3. **Join.** Players land on `/room/ABCD` → `POST /api/v1/rooms/[code] { action: "join", name, avatarSeed }` → first N joiners get `prompter`, rest `spectator`. Lobby shows avatars, names, ready toggle. Host has Start button.
 4. **Ready up.** Non-host players `POST { action: "ready" }` (toggleable via `unready`). Host doesn't ready themselves. Server fires `player-ready` over Pusher; clients refetch.
-5. **Start.** Host fires `POST { action: "start" }` → validations (host, ≥1 non-host, all non-host ready) → server runs the **keystone composition** (status flips `lobby → generating`, broadcasts `round-generating`, then runs `getCategoryPrompt → falGenerate → clipEmbed`, caches `targetImageUrl` + `targetPrompt` (server-only) + `targetEmbedding` on the room, flips `generating → playing`, stamps `phaseEndsAt = now + settings.timer * 1000`, broadcasts `round-starting` with `{targetImageUrl, category, phaseEndsAt}`). Total wall time ≈ 2s warm.
-6. **Playing phase** (timer-bounded). Players submit prompts via `POST /api/v1/generate { roomCode, prompt }`. Each submission is FLUX'd with the round's `seed` (same latent space as target), embedded via CLIP, cosine'd against the cached `targetEmbedding`, qualified against the difficulty threshold (≥0.88 default), persisted as an `Attempt`, broadcast as `attempt-submitted`. Per-player cap: `settings.attemptsPerRound`. Per-player debounce: 3s atomic Redis NX-EX. Players also `POST { action: "pick", attemptId }` to lock in which attempt counts as their final submission (changeable any time during playing; if no pick, server falls back to highest-similarity-qualified, then highest-similarity).
+5. **Start.** Host fires `POST { action: "start" }` → validations (host, ≥1 non-host, all non-host ready) → server runs the **keystone composition** (status flips `lobby → generating`, broadcasts `round-generating`, then runs `getCategoryPrompt → falGenerate`, caches `targetImageUrl` + `targetPrompt` (server-only) on the room, flips `generating → playing`, stamps `phaseEndsAt = now + settings.timer * 1000`, broadcasts `round-starting` with `{targetImageUrl, category, phaseEndsAt}`). Total wall time ≈ 1s warm.
+6. **Playing phase** (timer-bounded). Players submit prompts via `POST /api/v1/generate { roomCode, prompt }`. Each submission is FLUX'd with the round's `seed` (same latent space as target), persisted as an `Attempt` (with placeholder `similarity: 0, qualified: false`), broadcast as `attempt-submitted`. Per-player cap: `settings.attemptsPerRound`. Per-player debounce: 3s atomic Redis NX-EX. Players also `POST { action: "pick", attemptId }` to lock in which attempt is shown to voters (changeable any time during playing; if no pick, server falls back to last-submitted).
 7. **Voting phase** (20s). When the playing-phase countdown hits zero, any client fires `POST { action: "advance" }`. Server validates `Date.now() >= phaseEndsAt`, flips to `voting`, stamps a new `phaseEndsAt`, broadcasts `voting-starting`. Clients fetch `GET /api/v1/rooms/[code]/round/[n]` to populate the carousel of every other player's final attempt. Each voter `POST /api/v1/vote { roomCode, targetUserId, value }` (bad/ok/good/excellent) — one vote per target per round, anti-self-vote. Server broadcasts `vote-submitted { voterId }` (values stay private until reveal).
-8. **Reveal phase** (15s). `advance` again → server reads attempts + votes from Redis → `selectFinalAttempts(attempts, room.picks)` → `awardRoundScores(room.scores, finals, votes)` (CLIP points + vote points) → flips to `reveal` → broadcasts `reveal-starting` with `{targetPrompt, scores, phaseEndsAt}`. UI shows target prompt, per-player finals, vote breakdown, leaderboard.
+8. **Reveal phase** (15s). `advance` again → server reads attempts + votes from Redis → `selectFinalAttempts(attempts, room.picks)` → `awardRoundScores(room.scores, finals, votes)` (vote points only) → flips to `reveal` → broadcasts `reveal-starting` with `{targetPrompt, scores, phaseEndsAt}`. UI shows target prompt, per-player finals, vote breakdown, leaderboard.
 9. **Next round or end.** `advance` from `reveal`: if `currentRound >= settings.rounds` → status `ended`, broadcast `game-ended` with final scores. Else → `generateRoundTarget` runs again (FLUX + CLIP for round N+1's target), loop back to step 6.
 
 ### State machine
@@ -284,7 +281,7 @@ This means the lobby roster updates itself — no custom join/leave events neede
 ```
 lobby
   ↓ start
-generating ───────── (FLUX + CLIP target gen, ~2s)
+generating ───────── (FLUX target gen, ~1s)
   ↓ on success
 playing  ─────────── (settings.timer s; players submit + pick)
   ↓ advance (after phaseEndsAt)
@@ -324,8 +321,8 @@ reveal   ─────────── (15s; targetPrompt + scores broadcast
 - 1h TTL on every Redis key.
 - `tokens = Math.ceil(prompt.length / 4)` — no real tokenizer; only meaningful as a deep-tiebreak rung.
 - Anti-cheese: reject prompts >`promptMaxLength`, per-player 3s debounce on `/generate` via Redis NX-EX, per-round attempt cap (`attemptsPerRound`).
-- `targetPrompt` and `targetEmbedding` never sent to client; `targetPrompt` only surfaces on the `reveal-starting` Pusher event.
-- Pre-warm fal: dummy generation request when lobby mounts (mask cold start). Replicate cold-start (~5–30s on first round) is a tracked risk — keep CLIP warm by hitting it during lobby idle.
+- `targetPrompt` never sent to client; only surfaces on the `reveal-starting` Pusher event.
+- Pre-warm fal: dummy generation request when lobby mounts (mask cold start).
 - Disconnect grace: Pusher `member_removed` flips `connected: false` + sets `lastSeenAt`; server-side timer DNFs the player only if they don't return within `disconnectGraceMs` (30s default). Host succession runs off the same event using `joinedAt` order.
 - Per-room rate limit, $20 hard cap, debounce to keep cost bounded.
 
@@ -339,7 +336,7 @@ UPSTASH_REDIS_REST_TOKEN=
 # Image generation (fal.ai)
 FAL_KEY=
 
-# CLIP scoring (Replicate)
+# Unused since 2026-05-09 (CLIP dropped). Left in case the team reverts.
 REPLICATE_API_TOKEN=
 
 # Realtime (Pusher)

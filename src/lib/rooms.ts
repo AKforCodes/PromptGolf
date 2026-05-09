@@ -36,7 +36,6 @@ export async function createRoom(
     seed: null,
     targetImageUrl: null,
     targetPrompt: null,
-    targetEmbedding: null,
     scores: {},
     picks: {},
     phaseEndsAt: null,

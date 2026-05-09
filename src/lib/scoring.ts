@@ -1,21 +1,6 @@
-export function cosine(a: number[], b: number[]): number {
-  if (a.length !== b.length) {
-    throw new Error(`embedding length mismatch: ${a.length} vs ${b.length}`)
-  }
-  let dot = 0
-  let na = 0
-  let nb = 0
-  for (let i = 0; i < a.length; i++) {
-    dot += a[i] * b[i]
-    na += a[i] * a[i]
-    nb += b[i] * b[i]
-  }
-  return dot / (Math.sqrt(na) * Math.sqrt(nb))
-}
-
-export function qualifies(similarity: number, threshold: number): boolean {
-  return similarity >= threshold
-}
+// Vote-only scoring. CLIP was investigated and dropped 2026-05-09 in favour of
+// pure player-voting — target images now serve as a shared anchor for voters,
+// not as an algorithmic scoring reference. See CLAUDE.md → Locked Decisions.
 
 type Rankable = {
   chars: number
@@ -24,8 +9,9 @@ type Rankable = {
   submittedAt: number
 }
 
-// Golf ranking: lower chars wins, then lower tokens, then higher similarity,
-// then earlier submission. Caller is responsible for partitioning DNFs below.
+// In-round attempt ranking — used for display order, not for scoring.
+// Lower chars wins, then lower tokens, then higher similarity (vestigial
+// since CLIP was dropped — always 0 — but harmless), then earlier submission.
 export function tiebreak<T extends Rankable>(attempts: readonly T[]): T[] {
   return [...attempts].sort((a, b) => {
     if (a.chars !== b.chars) return a.chars - b.chars
@@ -35,29 +21,18 @@ export function tiebreak<T extends Rankable>(attempts: readonly T[]): T[] {
   })
 }
 
-type ScorableAttempt = {
+type PickableAttempt = {
+  id: string
   userId: string
-  similarity: number
-  qualified: boolean
+  submittedAt: number
 }
-
-type PickableAttempt = ScorableAttempt & { id: string }
 
 type ScorableVote = {
   targetId: string
   value: "bad" | "ok" | "good" | "excellent"
 }
 
-// CLIP component: 60 points × similarity for qualifying attempts; 0 for DNFs.
-// 1.0 sim = 60 pts; 0.9 sim = 54 pts; sub-threshold = 0 pts.
-export const CLIP_POINTS_MAX = 60
-
-export function clipPoints(similarity: number, qualified: boolean): number {
-  return qualified ? Math.round(CLIP_POINTS_MAX * similarity) : 0
-}
-
-// Vote component: per-vote points received from other players.
-// Per-round vote bonus = sum over all votes targeting you.
+// Vote points received per vote. Spec: 4 excellents = 40 pts.
 export const VOTE_POINTS: Record<ScorableVote["value"], number> = {
   bad: 0,
   ok: 3,
@@ -66,7 +41,7 @@ export const VOTE_POINTS: Record<ScorableVote["value"], number> = {
 }
 
 // Resolve each player's "final" attempt for the round.
-// Priority: explicit pick → highest-similarity qualified → highest-similarity overall.
+// Priority: explicit pick → last-submitted (most recent submittedAt).
 // Players with zero attempts are simply absent from the result.
 // Pure.
 export function selectFinalAttempts<T extends PickableAttempt>(
@@ -87,34 +62,26 @@ export function selectFinalAttempts<T extends PickableAttempt>(
       finals.push(explicit)
       continue
     }
-    const qualified = userAttempts.filter((a) => a.qualified)
-    if (qualified.length > 0) {
-      finals.push(qualified.reduce((b, a) => (a.similarity > b.similarity ? a : b)))
-      continue
-    }
-    finals.push(userAttempts.reduce((b, a) => (a.similarity > b.similarity ? a : b)))
+    finals.push(
+      userAttempts.reduce((b, a) => (a.submittedAt > b.submittedAt ? a : b))
+    )
   }
   return finals
 }
 
-// Award per-round CLIP + vote points into the cumulative scores map.
-// Caller must pre-dedup attempts to one-per-player via selectFinalAttempts.
-// DNFs (qualified === false) contribute 0 CLIP but can still receive vote points.
+// Award per-round vote points into the cumulative scores map.
+// `finalAttempts` is currently unused for scoring but retained in the signature
+// so callers can pass it without rewiring; it lets us reintroduce a CLIP
+// component later without changing the call sites if the team changes their mind.
 // Pure: returns a new object.
-export function awardRoundScores<A extends ScorableAttempt, V extends ScorableVote>(
+export function awardRoundScores<A extends { userId: string }, V extends ScorableVote>(
   currentScores: Record<string, number>,
-  finalAttempts: readonly A[],
+  _finalAttempts: readonly A[],
   votes: readonly V[] = []
 ): Record<string, number> {
   const next = { ...currentScores }
-
-  for (const a of finalAttempts) {
-    next[a.userId] = (next[a.userId] ?? 0) + clipPoints(a.similarity, a.qualified)
-  }
-
   for (const v of votes) {
     next[v.targetId] = (next[v.targetId] ?? 0) + VOTE_POINTS[v.value]
   }
-
   return next
 }
