@@ -1,78 +1,170 @@
 "use client";
 
-import { useEffect } from "react";
-import Image from "next/image";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { tryCatch } from "@/lib/result";
 
+type Mode = "menu" | "join";
+
+const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+
+function randomCode(): string {
+  let out = "";
+  for (let i = 0; i < 4; i++) {
+    out += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
+  }
+  return out;
+}
+
+function randomGuestName(): string {
+  const n = Math.floor(Math.random() * 99) + 1;
+  return `Guest-${n.toString().padStart(2, "0")}`;
+}
+
 export default function Home() {
+  const router = useRouter();
+  const [name, setName] = useState<string>("");
+  const [mode, setMode] = useState<Mode>("menu");
+  const [code, setCode] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+
   useEffect(() => {
+    setName(randomGuestName());
     const seed = async () => {
-      const [error] = await tryCatch(fetch("/api/v1/user/seed"))
-      if (error) {
-        console.error("Failed to seed user:", error)
+      const [err] = await tryCatch(fetch("/api/v1/user/seed"));
+      if (err) {
+        console.error("Failed to seed user:", err);
       }
-    }
-    seed()
+    };
+    seed();
   }, []);
+
+  const handleStart = () => {
+    if (!name.trim()) {
+      setError("Pick a name first");
+      return;
+    }
+    const newCode = randomCode();
+    router.push(`/room/${newCode}?host=1&name=${encodeURIComponent(name)}`);
+  };
+
+  const handleJoin = () => {
+    setError(null);
+    setMode("join");
+  };
+
+  const handleJoinSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleaned = code.trim().toUpperCase();
+    if (cleaned.length !== 4) {
+      setError("Room code is 4 letters");
+      return;
+    }
+    if (!name.trim()) {
+      setError("Pick a name first");
+      return;
+    }
+    router.push(`/room/${cleaned}?name=${encodeURIComponent(name)}`);
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
+    <main className="flex flex-1 items-center justify-center px-4 py-10">
+      <div className="w-full max-w-xl">
+        <div className="mb-8 text-center">
+          <div className="mb-2 text-6xl">⛳️</div>
+          <h1 className="font-heading text-5xl font-bold tracking-tight sm:text-6xl">
+            PROMPT GOLF
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+          <p className="mt-2 font-heading text-lg text-[#0A0A0A]/70">
+            shortest prompt wins
           </p>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        <div className="rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-8 shadow-chunky-lg sm:p-10">
+          <label className="mb-2 block font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/70">
+            your name
+          </label>
+          <input
+            value={name}
+            onChange={(e) => {
+              setName(e.target.value.slice(0, 16));
+              setError(null);
+            }}
+            maxLength={16}
+            className="w-full rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] px-5 py-4 text-center font-heading text-2xl font-semibold outline-none transition focus:bg-white"
+            placeholder="Guest-01"
+            aria-label="Player name"
+          />
+
+          {mode === "menu" ? (
+            <div className="mt-6 flex flex-col gap-4">
+              <button
+                onClick={handleStart}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer"
+              >
+                Start Game
+              </button>
+              <button
+                onClick={handleJoin}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FACC15] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer"
+              >
+                Join Game
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleJoinSubmit} className="mt-6 flex flex-col gap-4">
+              <label className="block font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/70">
+                room code
+              </label>
+              <input
+                value={code}
+                onChange={(e) => {
+                  setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4));
+                  setError(null);
+                }}
+                autoFocus
+                maxLength={4}
+                inputMode="text"
+                autoCapitalize="characters"
+                spellCheck={false}
+                className="w-full rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] px-5 py-4 text-center font-heading text-4xl font-bold uppercase tracking-[0.5em] outline-none transition focus:bg-white"
+                placeholder="ABCD"
+                aria-label="Room code"
+              />
+              <button
+                type="submit"
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer"
+              >
+                Enter Room
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setMode("menu");
+                  setCode("");
+                  setError(null);
+                }}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-white py-3 font-heading text-base font-semibold uppercase tracking-wide text-[#0A0A0A] shadow-chunky-sm cursor-pointer"
+              >
+                Back
+              </button>
+            </form>
+          )}
+
+          {error && (
+            <p
+              role="alert"
+              className="mt-4 rounded-xl border-[3px] border-[#0A0A0A] bg-[#F472B6] px-4 py-2 text-center font-heading text-sm font-semibold"
+            >
+              {error}
+            </p>
+          )}
         </div>
-      </main>
-    </div>
+
+        <p className="mt-8 text-center font-heading text-sm text-[#0A0A0A]/50">
+          tap fast · think short · win big
+        </p>
+      </div>
+    </main>
   );
 }

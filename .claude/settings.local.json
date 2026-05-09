@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git reset *)",
+      "Bash(git push *)",
+      "Bash(npm audit *)",
+      "Bash(npx tsc *)"
+    ]
+  }
+}
