@@ -78,6 +78,19 @@ export async function joinRoom(
   return asJson<JoinRoomResponse>(res);
 }
 
+export async function updateRoomSettings(
+  code: string,
+  settings: RoomSettings
+): Promise<{ room: RoomState }> {
+  const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "update", settings }),
+  });
+  return asJson<{ room: RoomState }>(res);
+}
+
 export async function leaveRoom(code: string): Promise<LeaveRoomResponse> {
   const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
     method: "POST",

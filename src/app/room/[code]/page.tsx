@@ -11,6 +11,7 @@ import {
   joinRoom,
   leaveRoom,
   seedUser,
+  updateRoomSettings,
 } from "@/lib/api";
 import { getPusher } from "@/lib/pusher-client";
 
@@ -135,18 +136,29 @@ interface RoomLobbyProps {
   code: string;
 }
 
+type Phase = "loading" | "needs-name" | "ready";
+
+function randomGuestName(): string {
+  const n = Math.floor(Math.random() * 99) + 1;
+  return `Guest-${n.toString().padStart(2, "0")}`;
+}
+
 function RoomLobby({ code }: RoomLobbyProps) {
   const router = useRouter();
 
   const [userId, setUserId] = useState<string>("");
   const [roomState, setRoomState] = useState<RoomState | null>(null);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [phase, setPhase] = useState<Phase>("loading");
   const [fatalError, setFatalError] = useState<string | null>(null);
 
   const [ready, setReady] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [shareUrl, setShareUrl] = useState<string>("");
+
+  const [joinName, setJoinName] = useState<string>("");
+  const [joinBusy, setJoinBusy] = useState<boolean>(false);
+  const [joinError, setJoinError] = useState<string | null>(null);
 
   const [localSettings, setLocalSettings] = useState<RoomSettings | null>(null);
 
@@ -181,7 +193,6 @@ function RoomLobby({ code }: RoomLobbyProps) {
       if (cancelled) return;
       if (seedErr) {
         setFatalError("Could not start a session.");
-        setLoading(false);
         return;
       }
       const uid = seedData.user_id;
@@ -195,67 +206,107 @@ function RoomLobby({ code }: RoomLobbyProps) {
         } else {
           setFatalError("Could not load the room.");
         }
-        setLoading(false);
         return;
       }
 
-      let room = getData.room;
+      const room = getData.room;
       const alreadyIn = room.players.some((p) => p.userId === uid);
 
-      if (!alreadyIn) {
-        const guestName = `Guest-${Math.floor(Math.random() * 90 + 10)}`;
-        const [joinErr, joinData] = await tryCatch(
-          joinRoom(code, guestName, uid)
-        );
-        if (cancelled) return;
-        if (joinErr) {
-          setFatalError(
-            joinErr instanceof ApiError && joinErr.status === 404
-              ? "Room not found."
-              : "Could not join this room."
-          );
-          setLoading(false);
-          return;
-        }
-        room = joinData.room;
+      if (alreadyIn) {
+        setRoomState(room);
+        setLocalSettings(room.settings);
+        setPhase("ready");
+      } else {
+        setJoinName(randomGuestName());
+        setPhase("needs-name");
       }
-
-      setRoomState(room);
-      setLocalSettings(room.settings);
-      setLoading(false);
-
-      // Subscribe to presence channel.
-      const pusher = getPusher();
-      const channelName = `presence-room-${code}`;
-      const channel = pusher.subscribe(channelName);
-      channelRef.current = channel;
-
-      const onChange = () => {
-        void refetchRoom();
-      };
-
-      channel.bind("pusher:subscription_error", (status: unknown) => {
-        console.error("Pusher subscription error", status);
-      });
-      channel.bind("pusher:member_added", onChange);
-      channel.bind("pusher:member_removed", onChange);
-      channel.bind("player-joined", onChange);
-      channel.bind("player-left", onChange);
     };
 
     void init();
 
     return () => {
       cancelled = true;
+    };
+  }, [code]);
+
+  useEffect(() => {
+    if (phase !== "ready") return;
+
+    const pusher = getPusher();
+    const channelName = `presence-room-${code}`;
+    const channel = pusher.subscribe(channelName);
+    channelRef.current = channel;
+
+    const onChange = () => {
+      void refetchRoom();
+    };
+
+    channel.bind("pusher:subscription_error", (status: unknown) => {
+      console.error("Pusher subscription error", status);
+    });
+    channel.bind("pusher:member_added", onChange);
+    channel.bind("pusher:member_removed", onChange);
+    channel.bind("player-joined", onChange);
+    channel.bind("player-left", onChange);
+    channel.bind("settings-updated", onChange);
+
+    return () => {
       const ch = channelRef.current;
       if (ch) {
         ch.unbind_all();
-        const pusher = getPusher();
-        pusher.unsubscribe(`presence-room-${code}`);
+        pusher.unsubscribe(channelName);
         channelRef.current = null;
       }
     };
-  }, [code, refetchRoom]);
+  }, [phase, code, refetchRoom]);
+
+  // Host: debounced sync of local settings → server.
+  useEffect(() => {
+    if (!isHost) return;
+    if (phase !== "ready") return;
+    if (!localSettings || !roomState) return;
+    if (
+      JSON.stringify(localSettings) === JSON.stringify(roomState.settings)
+    ) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      void updateRoomSettings(code, localSettings).catch((err) => {
+        console.error("Failed to sync settings:", err);
+      });
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [localSettings, roomState, isHost, phase, code]);
+
+  const handleJoinSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (joinBusy) return;
+    const name = joinName.trim();
+    if (!name) {
+      setJoinError("Pick a name first");
+      return;
+    }
+    setJoinError(null);
+    setJoinBusy(true);
+
+    const [err, data] = await tryCatch(joinRoom(code, name, userId));
+    if (err) {
+      setJoinError(
+        err instanceof ApiError && err.status === 404
+          ? "Room not found."
+          : "Could not join this room."
+      );
+      setJoinBusy(false);
+      return;
+    }
+
+    setRoomState(data.room);
+    setLocalSettings(data.room.settings);
+    setJoinBusy(false);
+    setPhase("ready");
+  };
 
   // Keep non-host's settings view in sync with server.
   useEffect(() => {
@@ -305,19 +356,11 @@ function RoomLobby({ code }: RoomLobbyProps) {
     router.push("/");
   };
 
-  if (loading) {
-    return (
-      <main className="flex flex-1 items-center justify-center">
-        <div className="font-heading text-2xl">Loading room…</div>
-      </main>
-    );
-  }
-
-  if (fatalError || !roomState) {
+  if (fatalError) {
     return (
       <main className="flex flex-1 items-center justify-center px-4">
         <div className="w-full max-w-md rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-8 text-center shadow-chunky-lg">
-          <p className="font-heading text-2xl font-bold">{fatalError ?? "Something went wrong"}</p>
+          <p className="font-heading text-2xl font-bold">{fatalError}</p>
           <button
             onClick={() => router.push("/")}
             className="press mt-6 rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] px-6 py-3 font-heading text-base font-bold uppercase tracking-wide shadow-chunky-sm cursor-pointer"
@@ -325,6 +368,89 @@ function RoomLobby({ code }: RoomLobbyProps) {
             Back to start
           </button>
         </div>
+      </main>
+    );
+  }
+
+  if (phase === "loading") {
+    return (
+      <main className="flex flex-1 items-center justify-center">
+        <div className="font-heading text-2xl">Loading room…</div>
+      </main>
+    );
+  }
+
+  if (phase === "needs-name") {
+    return (
+      <main className="flex flex-1 items-center justify-center px-4 py-10">
+        <div className="w-full max-w-xl">
+          <div className="mb-8 text-center">
+            <div className="mb-2 text-5xl">⛳️</div>
+            <h1 className="font-heading text-3xl font-bold tracking-tight sm:text-4xl">
+              JOINING ROOM
+            </h1>
+            <div className="mt-2 font-heading text-5xl font-bold tracking-[0.3em]">
+              {code}
+            </div>
+          </div>
+
+          <form
+            onSubmit={handleJoinSubmit}
+            className="rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-8 shadow-chunky-lg sm:p-10"
+          >
+            <label className="mb-2 block font-heading text-sm font-semibold uppercase tracking-wide text-[#0A0A0A]/70">
+              your name
+            </label>
+            <input
+              value={joinName}
+              onChange={(e) => {
+                setJoinName(e.target.value.slice(0, 16));
+                setJoinError(null);
+              }}
+              maxLength={16}
+              autoFocus
+              disabled={joinBusy}
+              className="w-full rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] px-5 py-4 text-center font-heading text-2xl font-semibold outline-none transition focus:bg-white disabled:opacity-60"
+              placeholder="Guest-01"
+              aria-label="Player name"
+            />
+
+            <div className="mt-6 flex flex-col gap-3">
+              <button
+                type="submit"
+                disabled={joinBusy}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer disabled:cursor-wait disabled:opacity-70"
+              >
+                {joinBusy ? "Joining…" : "Join Game"}
+              </button>
+              <button
+                type="button"
+                onClick={() => router.push("/")}
+                disabled={joinBusy}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-white py-3 font-heading text-base font-semibold uppercase tracking-wide text-[#0A0A0A] shadow-chunky-sm cursor-pointer disabled:cursor-not-allowed"
+              >
+                Cancel
+              </button>
+            </div>
+
+            {joinError && (
+              <p
+                role="alert"
+                className="mt-4 rounded-xl border-[3px] border-[#0A0A0A] bg-[#F472B6] px-4 py-2 text-center font-heading text-sm font-semibold"
+              >
+                {joinError}
+              </p>
+            )}
+          </form>
+        </div>
+      </main>
+    );
+  }
+
+  if (!roomState) {
+    return (
+      <main className="flex flex-1 items-center justify-center">
+        <div className="font-heading text-2xl">Loading room…</div>
       </main>
     );
   }

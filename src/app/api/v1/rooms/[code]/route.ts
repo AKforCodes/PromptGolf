@@ -2,8 +2,8 @@ import { cookies } from "next/headers"
 import { NextResponse } from "next/server"
 import { z } from "zod"
 import { pusher } from "@/lib/pusher"
-import type { Player } from "@/lib/types"
-import { getRoom, joinRoom, leaveRoom } from "@/lib/rooms"
+import { Player, RoomSettings } from "@/lib/types"
+import { getRoom, joinRoom, leaveRoom, saveRoom } from "@/lib/rooms"
 
 const JoinAction = z.object({
   action: z.literal("join"),
@@ -15,7 +15,16 @@ const LeaveAction = z.object({
   action: z.literal("leave"),
 })
 
-const RoomAction = z.discriminatedUnion("action", [JoinAction, LeaveAction])
+const UpdateAction = z.object({
+  action: z.literal("update"),
+  settings: RoomSettings,
+})
+
+const RoomAction = z.discriminatedUnion("action", [
+  JoinAction,
+  LeaveAction,
+  UpdateAction,
+])
 
 export async function GET(
   _request: Request,
@@ -87,5 +96,26 @@ export async function POST(
     })
 
     return NextResponse.json({ room: updatedRoom })
+  }
+
+  if (action === "update") {
+    if (room.hostId !== userId) {
+      return NextResponse.json({ error: "host only" }, { status: 403 })
+    }
+    if (room.status !== "lobby") {
+      return NextResponse.json(
+        { error: "settings locked once round starts" },
+        { status: 409 }
+      )
+    }
+
+    room.settings = parsed.data.settings
+    await saveRoom(room)
+
+    await pusher.trigger(`presence-room-${code}`, "settings-updated", {
+      settings: room.settings,
+    })
+
+    return NextResponse.json({ room })
   }
 }
