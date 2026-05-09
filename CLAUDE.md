@@ -10,10 +10,10 @@ Jackbox-style party game. Players see a target image, race to write the shortest
 |---|---|
 | Game mode v1 | Showdown only (multiplayer race, configurable timer) |
 | Modality | Image targets, FLUX schnell @ 4 steps, fixed seed per round |
-| Scoring | Threshold gate (CLIP ≥0.78) + char count tiebreak |
+| Scoring | Threshold gate (CLIP ≥0.88) + char count tiebreak. Calibrated 2026-05-09 against Replicate `andreasjansson/clip-features` (768d openai/clip-vit-large-patch14): `wrong` baseline ≈0.85, `fuzzy` qualifying ≈0.98. Image-image CLIP cosine has high baseline — separation matters more than absolute. |
 | Tiebreak ladder | char count → token count → CLIP score → submission timestamp |
 | Length unit | Chars primary, tokens secondary |
-| CLIP location | Server-side via fal endpoint (no transformers.js — bundle risk on mobile) |
+| CLIP location | Server-side via Replicate `andreasjansson/clip-features` (version-pinned). Returns 768-dim embedding per image; cosine computed in JS. fal CLIP was investigated and dropped — only fal endpoint exposing image embeddings is SAM-3, which returns a 1.3M-dim segmentation feature map that doesn't discriminate semantic similarity. |
 | Rounds per game | 1–5, default 3 |
 | Max players | 1–8, default 8 |
 | Prompt max length | 50–200 chars, default 200 |
@@ -34,7 +34,7 @@ Jackbox-style party game. Players see a target image, race to write the shortest
 - State: Upstash Redis (room state, attempts, leaderboard)
 - Realtime: Pusher Channels
 - Image gen: fal.ai FLUX schnell
-- Scoring: fal CLIP endpoint (server-side)
+- Scoring: Replicate `andreasjansson/clip-features` (server-side, version-pinned)
 - Animation: Framer Motion
 - Sound: Howler.js
 - Avatars: DiceBear API (URL-only)
@@ -74,10 +74,11 @@ src/
     types.ts          # Room, Player, RoundState, Attempt, Scores
     redis.ts          # Upstash client
     pusher.ts         # client + server
-    fal.ts            # FLUX gen + CLIP scoring wrappers
+    fal.ts            # FLUX gen wrapper (target image + per-submission candidate gen)
+    replicate.ts      # CLIP embedding wrapper (andreasjansson/clip-features, version-pinned)
     rooms.ts          # room state CRUD
     targets.ts        # category lookup → FLUX prompt + seed picker
-    scoring.ts        # threshold gate, tiebreak logic
+    scoring.ts        # cosine similarity, threshold gate, tiebreak logic
     session.ts        # cookie-based playerId mint + read
     devBot.ts         # fake player for testing
   components/
@@ -127,6 +128,7 @@ type RoomState = {
   currentRound: number;     // 0 in lobby, 1+ in play
   targetId: string | null;  // current round target image id
   seed: number | null;      // FLUX seed for current round
+  targetEmbedding: number[] | null;  // 768d CLIP vector cached at round start; reused for every submission's cosine
   createdAt: number;
 };
 ```
@@ -222,8 +224,8 @@ This means the lobby roster updates itself — no custom join/leave events neede
 1. Visitor lands on `/` → client calls `/api/v1/user/seed` → server mints `userId` cookie if missing → name input + DiceBear avatar editable → `[CREATE LOBBY]` or `[JOIN: ____]`
 2. Create lobby → host picks settings (max players 1–8, rounds 1–5, timer, category, prompt max length) → `POST /api/v1/rooms` → 4-letter code → `/room/ABCD`
 3. Players join via code or shared link → `POST /api/v1/rooms/ABCD { action: "join" }` → first N = prompter, rest = spectator → lobby with avatars, names, ready toggle. Host has Start button.
-4. Host clicks Start → status flips to `generating` → server picks a category from the room's pool, looks up that category's fixed FLUX prompt in `data/categories.json`, picks a fresh seed from the category's `seedRange`, calls FLUX schnell → stores `targetPrompt` server-side → broadcasts `{targetImageUrl, category}` + countdown via Pusher. Category id is fine to show — golf rewards short prompts, so knowing the genre is a hint, not an exploit. Only `targetPrompt` is server-only.
-5. `countdown(3)` → `playing(60)`. Players submit prompts → server calls fal FLUX with prompt → CLIP score vs target image → broadcast attempt via Pusher → leaderboard updates live
+4. Host clicks Start → status flips to `generating` → server picks a category from the room's pool, looks up that category's fixed FLUX prompt in `data/categories.json`, picks a fresh seed from the category's `seedRange`, calls FLUX schnell → embeds `targetImageUrl` once via Replicate `andreasjansson/clip-features` and caches the 768d vector in `RoomState.targetEmbedding` → stores `targetPrompt` server-side → broadcasts `{targetImageUrl, category}` + countdown via Pusher. Category id is fine to show — golf rewards short prompts, so knowing the genre is a hint, not an exploit. Only `targetPrompt` is server-only.
+5. `countdown(3)` → `playing(60)`. Players submit prompts → server calls fal FLUX with prompt → embeds candidate via Replicate clip-features → cosine similarity against cached `targetEmbedding` (pure JS, no extra API call) → broadcast attempt via Pusher → leaderboard updates live. Caching halves CLIP cost: 1 + N embeddings per round instead of 2N.
 6. Timer ends → `reveal(15)`: target on left, all attempts in stroke order, prompts (including target prompt) revealed with stagger animation, winner fanfare
 7. Next round (3 default) → final reveal → share card → return to lobby
 
@@ -253,6 +255,9 @@ UPSTASH_REDIS_REST_TOKEN=
 
 # Image generation (fal.ai)
 FAL_KEY=
+
+# CLIP scoring (Replicate)
+REPLICATE_API_TOKEN=
 
 # Realtime (Pusher)
 PUSHER_APP_ID=

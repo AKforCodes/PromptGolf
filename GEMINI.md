@@ -7,24 +7,22 @@ Jackbox-style party game. Players see a target image, race to write the shortest
 ## Locked Decisions
 
 | Area | Decision |
-|---|---|---|
+|---|---|
 | Game mode v1 | Showdown only (multiplayer race, configurable timer) |
 | Modality | Image targets, FLUX schnell @ 4 steps, fixed seed per round |
-| Target source | On-demand FLUX gen per round. Host picks one or more categories at lobby creation; **each category has a single pre-defined FLUX prompt** in `data/categories.json`. Round variety comes from a fresh seed each round, not prompt mixing. |
-| Scoring | Threshold gate (CLIP ≥0.78) + char count tiebreak |
+| Scoring | Threshold gate (CLIP ≥0.88) + char count tiebreak. Calibrated 2026-05-09 against Replicate `andreasjansson/clip-features` (768d openai/clip-vit-large-patch14): `wrong` baseline ≈0.85, `fuzzy` qualifying ≈0.98. Image-image CLIP cosine has high baseline — separation matters more than absolute. |
 | Tiebreak ladder | char count → token count → CLIP score → submission timestamp |
-| Length unit | Chars primary, tokens secondary (`Math.ceil(prompt.length / 4)` estimate, no real tokenizer) |
-| CLIP location | Server-side via fal endpoint (no transformers.js — bundle risk on mobile) |
+| Length unit | Chars primary, tokens secondary |
+| CLIP location | Server-side via Replicate `andreasjansson/clip-features` (version-pinned). Returns 768-dim embedding per image; cosine computed in JS. fal CLIP was investigated and dropped — only fal endpoint exposing image embeddings is SAM-3, which returns a 1.3M-dim segmentation feature map that doesn't discriminate semantic similarity. |
 | Rounds per game | 1–5, default 3 |
 | Max players | 1–8, default 8 |
 | Prompt max length | 50–200 chars, default 200 |
 | Timer | 30–120s, default 60 |
-| Categories | animals, landmarks, food, celebrity, logos |
-| Auth | Anon. `userId` cookie + DiceBear avatar editable on landing. |
+| Categories | animals, landmarks, foods, nature, characters |
+| Auth | Anon, user_id cookie + DiceBear avatar |
 | Persistence | Upstash Redis only, 1hr TTL, no SQL |
-| Realtime | Pusher (presence channels, pub/sub) |
+| Realtime | Pusher (presence + private channels, pub/sub) |
 | Role assignment | First N joiners = prompter, rest = spectator (host can swap) |
-| Disconnect grace | 30s — Pusher `member_removed` flips `connected: false`, server DNFs only if not back in 30s |
 | Voice commentary | DROPPED — spectator + share card win the hour |
 | Anti-cheese | Prompt max length cap, 3s resubmit debounce, target prompt never sent to client |
 | Demo first | Every decision biases toward live-on-stage moment |
@@ -36,7 +34,7 @@ Jackbox-style party game. Players see a target image, race to write the shortest
 - State: Upstash Redis (room state, attempts, leaderboard)
 - Realtime: Pusher Channels
 - Image gen: fal.ai FLUX schnell
-- Scoring: fal CLIP endpoint (server-side)
+- Scoring: Replicate `andreasjansson/clip-features` (server-side, version-pinned)
 - Animation: Framer Motion
 - Sound: Howler.js
 - Avatars: DiceBear API (URL-only)
@@ -76,10 +74,11 @@ src/
     types.ts          # Room, Player, RoundState, Attempt, Scores
     redis.ts          # Upstash client
     pusher.ts         # client + server
-    fal.ts            # FLUX gen + CLIP scoring wrappers
+    fal.ts            # FLUX gen wrapper (target image + per-submission candidate gen)
+    replicate.ts      # CLIP embedding wrapper (andreasjansson/clip-features, version-pinned)
     rooms.ts          # room state CRUD
     targets.ts        # category lookup → FLUX prompt + seed picker
-    scoring.ts        # threshold gate, tiebreak logic
+    scoring.ts        # cosine similarity, threshold gate, tiebreak logic
     session.ts        # cookie-based playerId mint + read
     devBot.ts         # fake player for testing
   components/
@@ -88,7 +87,7 @@ src/
     spectator/        # BigScreen, JoinQR
     ui/               # shadcn primitives
   data/
-    categories.json   # category id → {label, emoji, prompt, seedRange, demoSafe} — one fixed prompt per category
+    categories.json   # category id → {label, emoji, prompts[], seedRange} — pre-generated prompt pool per category (built offline via Vertex AI Gemini, see src/app/_scripts/generate-targets.ts)
 public/
   sounds/             # ding, buzz, fanfare
 ```
@@ -97,6 +96,7 @@ public/
 
 Defined in `lib/types.ts`. Stored in Redis via the Upstash SDK (auto-serializes objects), 1h TTL on every key.
 
+```ts
 ```ts
 // src/lib/types.ts — source of truth
 type RoomSettings = {
@@ -128,6 +128,7 @@ type RoomState = {
   currentRound: number;     // 0 in lobby, 1+ in play
   targetId: string | null;  // current round target image id
   seed: number | null;      // FLUX seed for current round
+  targetEmbedding: number[] | null;  // 768d CLIP vector cached at round start; reused for every submission's cosine
   createdAt: number;
 };
 ```
@@ -220,11 +221,11 @@ This means the lobby roster updates itself — no custom join/leave events neede
 
 ## Game Flow (Showdown)
 
-1. Visitor lands on `/` → server mints `playerId` cookie if missing → name input + DiceBear avatar editable → `[CREATE LOBBY]` or `[JOIN: ____]`
-2. Create lobby → host picks max players + one or more categories from `data/categories.json` → 4-letter code → `/room/ABCD`
-3. Players join via code or shared link → lobby, avatars, names, ready toggle. Host has Start button.
-4. Host clicks Start → status flips to `generating` → server picks a category from the room's pool, looks up that category's fixed FLUX prompt in `data/categories.json`, picks a fresh seed from the category's `seedRange`, calls FLUX schnell → stores `targetPrompt` server-side → broadcasts `{targetImageUrl, category}` + countdown. Category id is fine to show — golf rewards short prompts, so knowing the genre is a hint, not an exploit. Only `targetPrompt` is server-only.
-5. `countdown(3)` → `playing(60)`. Players submit prompts → server calls fal FLUX with prompt → CLIP score vs target image → broadcast attempt → leaderboard updates live
+1. Visitor lands on `/` → client calls `/api/v1/user/seed` → server mints `userId` cookie if missing → name input + DiceBear avatar editable → `[CREATE LOBBY]` or `[JOIN: ____]`
+2. Create lobby → host picks settings (max players 1–8, rounds 1–5, timer, category, prompt max length) → `POST /api/v1/rooms` → 4-letter code → `/room/ABCD`
+3. Players join via code or shared link → `POST /api/v1/rooms/ABCD { action: "join" }` → first N = prompter, rest = spectator → lobby with avatars, names, ready toggle. Host has Start button.
+4. Host clicks Start → status flips to `generating` → server picks a category from the room's pool, looks up that category's fixed FLUX prompt in `data/categories.json`, picks a fresh seed from the category's `seedRange`, calls FLUX schnell → embeds `targetImageUrl` once via Replicate `andreasjansson/clip-features` and caches the 768d vector in `RoomState.targetEmbedding` → stores `targetPrompt` server-side → broadcasts `{targetImageUrl, category}` + countdown via Pusher. Category id is fine to show — golf rewards short prompts, so knowing the genre is a hint, not an exploit. Only `targetPrompt` is server-only.
+5. `countdown(3)` → `playing(60)`. Players submit prompts → server calls fal FLUX with prompt → embeds candidate via Replicate clip-features → cosine similarity against cached `targetEmbedding` (pure JS, no extra API call) → broadcast attempt via Pusher → leaderboard updates live. Caching halves CLIP cost: 1 + N embeddings per round instead of 2N.
 6. Timer ends → `reveal(15)`: target on left, all attempts in stroke order, prompts (including target prompt) revealed with stagger animation, winner fanfare
 7. Next round (3 default) → final reveal → share card → return to lobby
 
@@ -232,7 +233,8 @@ Round state machine in Redis: `lobby → generating → countdown(3) → playing
 
 ## Conventions
 
-- `userId` is the unit of identity. Minted on landing, stored in an httpOnly cookie, never trusted blindly — every request validates it against the room's `players[]`.
+- `userId` is the unit of identity. Minted on landing via `/api/v1/user/seed`, stored in an httpOnly cookie, never trusted blindly — every request validates it against the room's `players[]`.
+- Role assignment: first `settings.maxPlayers` joiners get `prompter`, rest get `spectator`. Host can swap in lobby.
 - `roomCode` travels in the request body (not the URL or cookie) so a single player can spectate one room while playing in another tab.
 - 4-letter room codes via nanoid custom alphabet, no profanity, no `0/O 1/I`.
 - zod schemas on every API input.
@@ -240,7 +242,6 @@ Round state machine in Redis: `lobby → generating → countdown(3) → playing
 - `tokens = Math.ceil(prompt.length / 4)` — no real tokenizer, only a tiebreak proxy.
 - Anti-cheese: reject `> promptMaxLength` chars, debounce identical resubmits within 3s.
 - Target prompt never sent to client — only image URL — until the reveal payload.
-- `Room.version` increments on every write; clients reconcile on gap.
 - Pre-warm fal: dummy generation request fires when lobby mounts (mask cold start).
 - Disconnect grace: Pusher `member_removed` flips `connected: false` + sets `lastSeenAt`; server-side timer DNFs the player only if they don't return within `disconnectGraceMs` (30s default). Host succession runs off the same event using `joinedAt` order.
 - Per-room rate limit, $20 hard cap, debounce to keep cost bounded.
@@ -248,12 +249,15 @@ Round state machine in Redis: `lobby → generating → countdown(3) → playing
 ## Env Vars
 
 ```bash
-# Redis (Upstash)
+# runtime
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 
 # Image generation (fal.ai)
 FAL_KEY=
+
+# CLIP scoring (Replicate)
+REPLICATE_API_TOKEN=
 
 # Realtime (Pusher)
 PUSHER_APP_ID=
@@ -270,6 +274,10 @@ ELEVENLABS_VOICE_ID=
 
 # App
 NEXT_PUBLIC_APP_URL=
+
+# build-time only (npm run gen:targets — uses ADC, not bundled into the app)
+GCP_PROJECT_ID=
+GCP_LOCATION=europe-west2
 ```
 
 ## Implementation timeline
