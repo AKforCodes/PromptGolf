@@ -271,10 +271,11 @@ function RoomLobby({ code }: RoomLobbyProps) {
       return;
     }
 
-    const timer = setTimeout(() => {
-      void updateRoomSettings(code, localSettings).catch((err) => {
+    const timer = setTimeout(async () => {
+      const [err] = await tryCatch(updateRoomSettings(code, localSettings));
+      if (err) {
         console.error("Failed to sync settings:", err);
-      });
+      }
     }, 300);
 
     return () => clearTimeout(timer);
@@ -337,13 +338,13 @@ function RoomLobby({ code }: RoomLobbyProps) {
   );
 
   const copy = async (text: string, setter: (v: boolean) => void): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setter(true);
-      setTimeout(() => setter(false), 1500);
-    } catch (err) {
+    const [err] = await tryCatch(navigator.clipboard.writeText(text));
+    if (err) {
       console.error("Clipboard failed:", err);
+      return;
     }
+    setter(true);
+    setTimeout(() => setter(false), 1500);
   };
 
   const update = <K extends keyof RoomSettings>(key: K, value: RoomSettings[K]) => {
