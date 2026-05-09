@@ -355,9 +355,21 @@ function RoomLobby({ code }: RoomLobbyProps) {
     setLocalSettings((s) => ({ ...(s ?? settings), [key]: value }));
   };
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (!canStart) return;
-    router.push(`/room/${code}`);
+    const [postErr] = await tryCatch(
+      fetch(`/api/v1/rooms/${code}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start" }),
+      })
+    );
+    if (postErr) {
+      console.error("Start failed:", postErr);
+      return;
+    }
+    const [fetchErr] = await tryCatch(refetchRoom());
+    if (fetchErr) console.error("Refetch after start failed:", fetchErr);
   };
 
   const handleLeave = async () => {
