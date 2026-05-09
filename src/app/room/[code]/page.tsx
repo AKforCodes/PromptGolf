@@ -10,6 +10,7 @@ import {
   getRoom,
   joinRoom,
   leaveRoom,
+  readyRoom,
   seedUser,
   updateRoomSettings,
 } from "@/lib/api";
@@ -151,7 +152,6 @@ function RoomLobby({ code }: RoomLobbyProps) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [fatalError, setFatalError] = useState<string | null>(null);
 
-  const [ready, setReady] = useState<boolean>(false);
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [copiedLink, setCopiedLink] = useState<boolean>(false);
   const [shareUrl, setShareUrl] = useState<string>("");
@@ -248,6 +248,8 @@ function RoomLobby({ code }: RoomLobbyProps) {
     channel.bind("pusher:member_removed", onChange);
     channel.bind("player-joined", onChange);
     channel.bind("player-left", onChange);
+    channel.bind("player-ready", onChange);
+    channel.bind("round-starting", onChange);
     channel.bind("settings-updated", onChange);
 
     return () => {
@@ -348,7 +350,7 @@ function RoomLobby({ code }: RoomLobbyProps) {
 
   const handleStart = () => {
     if (!canStart) return;
-    console.log("Start round (mock — start endpoint pending)", { code, settings });
+    router.push(`/room/${code}`);
   };
 
   const handleLeave = async () => {
@@ -451,6 +453,28 @@ function RoomLobby({ code }: RoomLobbyProps) {
     return (
       <main className="flex flex-1 items-center justify-center">
         <div className="font-heading text-2xl">Loading room…</div>
+      </main>
+    );
+  }
+
+  if (roomState.status === "playing") {
+    return (
+      <main className="flex flex-1 items-center justify-center px-4">
+        <div className="w-full max-w-md rounded-3xl border-[3px] border-[#0A0A0A] bg-white p-8 text-center shadow-chunky-lg">
+          <p className="font-heading text-5xl">⛳️</p>
+          <h1 className="mt-4 font-heading text-3xl font-bold uppercase tracking-wide">
+            Playing Game
+          </h1>
+          <p className="mt-2 font-heading text-lg text-[#0A0A0A]/60">
+            Round {roomState.currentRound}
+          </p>
+          <button
+            onClick={() => router.push("/")}
+            className="press mt-6 rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] px-6 py-3 font-heading text-base font-bold uppercase tracking-wide shadow-chunky-sm cursor-pointer"
+          >
+            Back to start
+          </button>
+        </div>
       </main>
     );
   }
@@ -760,12 +784,20 @@ function RoomLobby({ code }: RoomLobbyProps) {
         <div className="flex flex-col gap-3">
           {!isHost && (
             <button
-              onClick={() => setReady((r) => !r)}
+              onClick={async () => {
+                const me = players.find((p) => p.userId === userId)
+                const [err] = await tryCatch(readyRoom(code, !me?.ready))
+                if (err) console.error("Failed to toggle ready:", err)
+              }}
               className={`press rounded-2xl border-[3px] border-[#0A0A0A] py-5 font-heading text-2xl font-bold uppercase tracking-wide shadow-chunky cursor-pointer ${
-                ready ? "bg-[#22C55E]" : "bg-[#FACC15]"
+                players.find((p) => p.userId === userId)?.ready
+                  ? "bg-[#22C55E]"
+                  : "bg-[#FACC15]"
               }`}
             >
-              {ready ? "✓ Ready" : "Tap to Ready Up"}
+              {players.find((p) => p.userId === userId)?.ready
+                ? "✓ Ready"
+                : "Tap to Ready Up"}
             </button>
           )}
           {isHost && (

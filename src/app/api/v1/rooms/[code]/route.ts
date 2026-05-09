@@ -20,10 +20,25 @@ const UpdateAction = z.object({
   settings: RoomSettings,
 })
 
+const ReadyAction = z.object({
+  action: z.literal("ready"),
+})
+
+const UnreadyAction = z.object({
+  action: z.literal("unready"),
+})
+
+const StartAction = z.object({
+  action: z.literal("start"),
+})
+
 const RoomAction = z.discriminatedUnion("action", [
   JoinAction,
   LeaveAction,
   UpdateAction,
+  ReadyAction,
+  UnreadyAction,
+  StartAction,
 ])
 
 export async function GET(
@@ -114,6 +129,52 @@ export async function POST(
 
     await pusher.trigger(`presence-room-${code}`, "settings-updated", {
       settings: room.settings,
+    })
+
+    return NextResponse.json({ room })
+  }
+
+  if (action === "ready" || action === "unready") {
+    const player = room.players.find((p) => p.userId === userId)
+    if (!player) {
+      return NextResponse.json({ error: "not in room" }, { status: 403 })
+    }
+
+    player.ready = action === "ready"
+    await saveRoom(room)
+
+    await pusher.trigger(`presence-room-${code}`, "player-ready", {
+      userId,
+      ready: player.ready,
+    })
+
+    return NextResponse.json({ room })
+  }
+
+  if (action === "start") {
+    if (room.hostId !== userId) {
+      return NextResponse.json({ error: "host only" }, { status: 403 })
+    }
+    if (room.status !== "lobby") {
+      return NextResponse.json({ error: "game already started" }, { status: 409 })
+    }
+    if (room.players.length < 2) {
+      return NextResponse.json({ error: "need at least 2 players" }, { status: 400 })
+    }
+    if (!room.players.every((p) => p.ready)) {
+      return NextResponse.json({ error: "not all players ready" }, { status: 400 })
+    }
+
+    room.status = "playing"
+    room.currentRound = 1
+    for (const p of room.players) {
+      p.ready = false
+    }
+    await saveRoom(room)
+
+    await pusher.trigger(`presence-room-${code}`, "round-starting", {
+      status: "playing",
+      round: room.currentRound,
     })
 
     return NextResponse.json({ room })

@@ -91,6 +91,19 @@ export async function updateRoomSettings(
   return asJson<{ room: RoomState }>(res);
 }
 
+export async function readyRoom(
+  code: string,
+  ready: boolean
+): Promise<{ room: RoomState }> {
+  const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: ready ? "ready" : "unready" }),
+  });
+  return asJson<{ room: RoomState }>(res);
+}
+
 export async function leaveRoom(code: string): Promise<LeaveRoomResponse> {
   const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
     method: "POST",
