@@ -330,7 +330,8 @@ function RoomLobby({ code }: RoomLobbyProps) {
   };
 
   const players: Player[] = roomState?.players ?? [];
-  const allReady = players.length > 0 && players.every((p) => p.ready);
+  const nonHostPlayers = players.filter((p) => p.userId !== roomState?.hostId);
+  const allReady = nonHostPlayers.length > 0 && nonHostPlayers.every((p) => p.ready);
   const canStart = isHost && allReady && players.length >= 2;
   const roomFull = players.length >= settings.maxPlayers;
 
