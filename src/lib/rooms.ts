@@ -37,6 +37,9 @@ export async function createRoom(
     targetImageUrl: null,
     targetPrompt: null,
     targetEmbedding: null,
+    scores: {},
+    picks: {},
+    phaseEndsAt: null,
     createdAt: Date.now(),
   }
 

@@ -2,7 +2,7 @@
 
 # PromptGolf
 
-Jackbox-style party game. Players see a target image, race to write the shortest prompt that recreates it via FLUX schnell. CLIP similarity gates qualification, char count breaks ties. 24hr hackathon, team of 3, demo-first.
+Jackbox-style party game. Players see a target image, race to write prompts that recreate it via FLUX schnell, then pick their best attempt to submit. Each round players vote on each others' final attempts (bad/ok/good/excellent). Round score = CLIP similarity points + vote points; cumulative highest score wins. 24hr hackathon, team of 3, demo-first.
 
 ## Locked Decisions
 
@@ -10,9 +10,11 @@ Jackbox-style party game. Players see a target image, race to write the shortest
 |---|---|
 | Game mode v1 | Showdown only (multiplayer race, configurable timer) |
 | Modality | Image targets, FLUX schnell @ 4 steps, fixed seed per round |
-| Scoring | Threshold gate (CLIP ≥0.88) + char count tiebreak. Calibrated 2026-05-09 against Replicate `andreasjansson/clip-features` (768d openai/clip-vit-large-patch14): `wrong` baseline ≈0.85, `fuzzy` qualifying ≈0.98. Image-image CLIP cosine has high baseline — separation matters more than absolute. |
-| Tiebreak ladder | char count → token count → CLIP score → submission timestamp |
-| Length unit | Chars primary, tokens secondary |
+| Scoring | Points-based per round, cumulative across rounds, highest total wins. **CLIP component** (qualified attempts only): `Math.round(60 × similarity)` → max 60 pts/round, 0 for DNFs. **Vote component**: each vote received → bad=0, ok=3, good=6, excellent=10 pts. Spec example: 1.0 sim + 4 excellents = 60 + 40 = 100 pts. |
+| Qualifying threshold | CLIP ≥0.88. Calibrated 2026-05-09 against Replicate `andreasjansson/clip-features` (768d openai/clip-vit-large-patch14): `wrong` baseline ≈0.85, `fuzzy` qualifying ≈0.98. Image-image cosine has a high floor — the threshold is a gate, not the score itself. Configurable per category later. |
+| Tiebreak ladder | Cumulative score → CLIP-only subtotal → char count → token count → submission timestamp. Used only when totals literally tie. |
+| Attempts per round | Host-configurable 1–5, default 3. Players submit multiple, then **pick** which one is their "final" submission for that round (affects both CLIP score and the voting carousel). |
+| Picks | Player-driven before voting starts. Fallback chain if no pick: highest-similarity qualified → highest-similarity overall. |
 | CLIP location | Server-side via Replicate `andreasjansson/clip-features` (version-pinned). Returns 768-dim embedding per image; cosine computed in JS. fal CLIP was investigated and dropped — only fal endpoint exposing image embeddings is SAM-3, which returns a 1.3M-dim segmentation feature map that doesn't discriminate semantic similarity. |
 | Rounds per game | 1–5, default 3 |
 | Max players | 1–8, default 8 |
@@ -64,21 +66,23 @@ src/
     room/[code]/page.tsx           # lobby + game (mode-switched)
     room/[code]/spectate/page.tsx  # projector view, read-only
     api/v1/
-      rooms/route.ts               # POST create
-      rooms/[code]/route.ts        # GET state, POST join/leave/ready/unready/start
-      user/seed/route.ts           # GET mint user_id cookie
-      pusher/auth/route.ts         # POST presence channel auth
-      generate/route.ts            # POST prompt → image_url + CLIP score
-      og/[attemptId]/route.ts      # share card PNG
+      rooms/route.ts                       # POST create
+      rooms/[code]/route.ts                # GET state, POST join/leave/update/ready/unready/start/advance/pick
+      rooms/[code]/round/[n]/route.ts      # GET round details (finalAttempts, votes, target — for voting + reveal screens)
+      user/seed/route.ts                   # GET mint user_id cookie
+      pusher/auth/route.ts                 # POST presence channel auth
+      generate/route.ts                    # POST player prompt → FLUX + CLIP scoring → Attempt
+      vote/route.ts                        # POST vote on another player's final attempt
+      og/[attemptId]/route.ts              # share card PNG
   lib/
-    types.ts          # Room, Player, RoundState, Attempt, Scores
+    types.ts          # RoomSettings, Player, RoomState, Attempt, Vote, VoteValue (zod schemas)
     redis.ts          # Upstash client
     pusher.ts         # client + server
     fal.ts            # FLUX gen wrapper (target image + per-submission candidate gen)
     replicate.ts      # CLIP embedding wrapper (andreasjansson/clip-features, version-pinned)
     rooms.ts          # room state CRUD
     targets.ts        # category lookup → FLUX prompt + seed picker
-    scoring.ts        # cosine similarity, threshold gate, tiebreak logic
+    scoring.ts        # cosine, qualifies, tiebreak, clipPoints, VOTE_POINTS, selectFinalAttempts, awardRoundScores
     session.ts        # cookie-based playerId mint + read
     devBot.ts         # fake player for testing
   components/
@@ -94,42 +98,79 @@ public/
 
 ## Data Model
 
-Defined in `lib/types.ts`. Stored in Redis via the Upstash SDK (auto-serializes objects), 1h TTL on every key.
+Defined in `lib/types.ts` as zod schemas (TypeScript types are inferred). Stored in Redis via the Upstash SDK (auto-serializes objects), 1h TTL on every key.
 
 ```ts
-```ts
-// src/lib/types.ts — source of truth
+// src/lib/types.ts — source of truth (simplified, see file for zod definitions)
+
 type RoomSettings = {
   gameMode: "showdown";
-  rounds: number;           // 1–5, default 3
-  maxPlayers: number;       // 1–8, default 8
-  timer: number;            // 30–120s, default 60
-  promptMaxLength: number;  // 50–200, default 200
-  category: "animals" | "landmarks" | "food" | "celebrity" | "logos";
+  rounds: number;            // 1–5, default 3
+  maxPlayers: number;        // 1–8, default 8
+  timer: number;             // 30–120s, default 60 (playing-phase duration)
+  promptMaxLength: number;   // 50–200, default 200
+  attemptsPerRound: number;  // 1–5, default 3 (host-set cap on submissions per player per round)
+  category: "animals" | "landmarks" | "foods" | "nature" | "characters";
+  difficulty: "easy" | "normal" | "hard";
 };
 
 type Player = {
-  userId: string;           // from httpOnly cookie, crypto.randomUUID()
+  userId: string;       // from httpOnly cookie, crypto.randomUUID()
   name: string;
-  avatarSeed: string;       // DiceBear seed
+  avatarSeed: string;
   role: "prompter" | "spectator";
   ready: boolean;
-  joinedAt: number;         // host succession order
-  connected: boolean;       // Pusher presence-driven
-  lastSeenAt: number;       // for 30s grace + idle GC
+  joinedAt: number;     // host succession order
+  connected: boolean;   // Pusher presence-driven
+  lastSeenAt: number;   // for 30s grace + idle GC
 };
 
+type RoomStatus =
+  | "lobby"
+  | "generating"   // server runs FLUX + CLIP; UI shows loading
+  | "countdown"    // (reserved — currently unused; start jumps lobby → generating → playing)
+  | "playing"     // players submit + pick; phaseEndsAt = now + settings.timer * 1000
+  | "voting"      // 20s; players vote bad/ok/good/excellent on each other's final attempt
+  | "reveal"      // 15s; targetPrompt + per-round scores broadcast
+  | "ended";       // game over; final scores stand
+
 type RoomState = {
-  code: string;             // "ABCD"
-  hostId: string;           // userId of current host
+  code: string;
+  hostId: string;
   settings: RoomSettings;
-  players: Player[];        // inline; ordered by joinedAt
-  status: "lobby" | "countdown" | "playing" | "reveal" | "ended";
-  currentRound: number;     // 0 in lobby, 1+ in play
-  targetId: string | null;  // current round target image id
-  seed: number | null;      // FLUX seed for current round
-  targetEmbedding: number[] | null;  // 768d CLIP vector cached at round start; reused for every submission's cosine
+  players: Player[];                      // inline; ordered by joinedAt
+  status: RoomStatus;
+  currentRound: number;                   // 0 in lobby, 1+ in play
+  targetId: string | null;
+  seed: number | null;                    // FLUX seed for current round
+  targetImageUrl: string | null;          // safe to broadcast
+  targetPrompt: string | null;            // SECRET — server-only until reveal
+  targetEmbedding: number[] | null;       // 768d CLIP vector cached at round start
+  scores: Record<string, number>;         // userId → cumulative points (CLIP + votes)
+  picks: Record<string, string>;          // userId → attemptId for current round; cleared on next round
+  phaseEndsAt: number | null;             // server-stamped epoch ms; clients render countdown to this
   createdAt: number;
+};
+
+type Attempt = {
+  id: string;            // nanoid (12 chars)
+  userId: string;
+  prompt: string;
+  imageUrl: string;      // candidate image returned by FLUX
+  similarity: number;    // CLIP cosine vs targetEmbedding
+  qualified: boolean;    // similarity >= difficulty threshold
+  chars: number;
+  tokens: number;        // ceil(chars / 4)
+  submittedAt: number;
+};
+
+type VoteValue = "bad" | "ok" | "good" | "excellent";
+
+type Vote = {
+  voterId: string;
+  targetId: string;
+  value: VoteValue;
+  submittedAt: number;
 };
 ```
 
@@ -138,12 +179,19 @@ type RoomState = {
 | Key | Type | Value | TTL |
 |---|---|---|---|
 | `room:{CODE}` | string (JSON) | `RoomState` | 1h |
+| `room:{CODE}:attempts:{round}` | string (JSON) | `Attempt[]` (read → push → write per submission) | 1h |
+| `room:{CODE}:votes:{round}` | string (JSON) | `Vote[]` (read → push → write per vote) | 1h |
+| `room:{CODE}:debounce:{userId}` | string | `"1"` with 3s TTL — atomic NX-EX rate limit on `/api/v1/generate` | 3s |
 
 ### Why this shape
 
 - **`players[]` inline on Room:** lobbies are ≤8 and we always read the full roster anyway. One read instead of N.
 - **`settings` as a single object:** clean encapsulation of room config, validated by zod on every API input.
 - **Role assignment:** first `settings.maxPlayers` joiners get `prompter`, rest get `spectator` — checked in `joinRoom()`.
+- **Attempts/votes in separate keys** to avoid rewriting full RoomState on every submission/vote (each round can hit 8 × 3 = 24 attempts plus 8 × 7 = 56 votes).
+- **`picks` inline** because they're tiny (≤8 entries, ~30 bytes each) and read together with the rest of RoomState during the voting → reveal transition.
+- **`targetEmbedding` inline:** ~6KB JSON when populated, but read once per submission to compute cosine — co-locating with the rest of room state avoids an extra round-trip.
+- **`phaseEndsAt` server-stamped:** clients can't lie about timer expiry. Server-side `advance` rejects early calls with 409 + the real `phaseEndsAt`.
 
 ## API + Pusher: How real-time works
 
@@ -221,17 +269,50 @@ This means the lobby roster updates itself — no custom join/leave events neede
 
 ## Game Flow (Showdown)
 
-1. Visitor lands on `/` → client calls `/api/v1/user/seed` → server mints `userId` cookie if missing → name input + DiceBear avatar editable → `[CREATE LOBBY]` or `[JOIN: ____]`
-2. Create lobby → host picks settings (max players 1–8, rounds 1–5, timer, category, prompt max length) → `POST /api/v1/rooms` → 4-letter code → `/room/ABCD`
-3. Players join via code or shared link → `POST /api/v1/rooms/ABCD { action: "join" }` → first N = prompter, rest = spectator → lobby with avatars, names, ready toggle. Host has Start button.
-4. Non-host players click "Ready Up" → `POST { action: "ready" }` → server sets `player.ready = true` in Redis → Pusher fires `player-ready` → all clients refetch room state. `{ action: "unready" }` toggles back. Host has no ready button — only non-host players are counted.
-5. When all non-host players are ready, host's "Start Round" button enables.
-6. Host clicks Start → `POST { action: "start" }` → server validates (host, ≥1 non-host player, all non-host players ready) → sets `room.status = "playing"`, `room.currentRound = 1`, resets all ready flags → Pusher fires `round-starting` → all clients transition to game view.
-7. `countdown(3)` → `playing(60)`. Players submit prompts → server calls fal FLUX with prompt → embeds candidate via Replicate clip-features → cosine similarity against cached `targetEmbedding` (pure JS, no extra API call) → broadcast attempt via Pusher → leaderboard updates live. Caching halves CLIP cost: 1 + N embeddings per round instead of 2N.
-6. Timer ends → `reveal(15)`: target on left, all attempts in stroke order, prompts (including target prompt) revealed with stagger animation, winner fanfare
-7. Next round (3 default) → final reveal → share card → return to lobby
+1. **Landing.** Visitor on `/` → client calls `/api/v1/user/seed` → server mints `userId` httpOnly cookie if missing → name input + DiceBear avatar (re-rollable) → `[CREATE LOBBY]` or `[JOIN: ____]`.
+2. **Create lobby.** Host picks settings (rounds, max players, timer, prompt cap, category, difficulty, **attempts per round**) → `POST /api/v1/rooms` → 4-letter code → `/room/ABCD`.
+3. **Join.** Players land on `/room/ABCD` → `POST /api/v1/rooms/[code] { action: "join", name, avatarSeed }` → first N joiners get `prompter`, rest `spectator`. Lobby shows avatars, names, ready toggle. Host has Start button.
+4. **Ready up.** Non-host players `POST { action: "ready" }` (toggleable via `unready`). Host doesn't ready themselves. Server fires `player-ready` over Pusher; clients refetch.
+5. **Start.** Host fires `POST { action: "start" }` → validations (host, ≥1 non-host, all non-host ready) → server runs the **keystone composition** (status flips `lobby → generating`, broadcasts `round-generating`, then runs `getCategoryPrompt → falGenerate → clipEmbed`, caches `targetImageUrl` + `targetPrompt` (server-only) + `targetEmbedding` on the room, flips `generating → playing`, stamps `phaseEndsAt = now + settings.timer * 1000`, broadcasts `round-starting` with `{targetImageUrl, category, phaseEndsAt}`). Total wall time ≈ 2s warm.
+6. **Playing phase** (timer-bounded). Players submit prompts via `POST /api/v1/generate { roomCode, prompt }`. Each submission is FLUX'd with the round's `seed` (same latent space as target), embedded via CLIP, cosine'd against the cached `targetEmbedding`, qualified against the difficulty threshold (≥0.88 default), persisted as an `Attempt`, broadcast as `attempt-submitted`. Per-player cap: `settings.attemptsPerRound`. Per-player debounce: 3s atomic Redis NX-EX. Players also `POST { action: "pick", attemptId }` to lock in which attempt counts as their final submission (changeable any time during playing; if no pick, server falls back to highest-similarity-qualified, then highest-similarity).
+7. **Voting phase** (20s). When the playing-phase countdown hits zero, any client fires `POST { action: "advance" }`. Server validates `Date.now() >= phaseEndsAt`, flips to `voting`, stamps a new `phaseEndsAt`, broadcasts `voting-starting`. Clients fetch `GET /api/v1/rooms/[code]/round/[n]` to populate the carousel of every other player's final attempt. Each voter `POST /api/v1/vote { roomCode, targetUserId, value }` (bad/ok/good/excellent) — one vote per target per round, anti-self-vote. Server broadcasts `vote-submitted { voterId }` (values stay private until reveal).
+8. **Reveal phase** (15s). `advance` again → server reads attempts + votes from Redis → `selectFinalAttempts(attempts, room.picks)` → `awardRoundScores(room.scores, finals, votes)` (CLIP points + vote points) → flips to `reveal` → broadcasts `reveal-starting` with `{targetPrompt, scores, phaseEndsAt}`. UI shows target prompt, per-player finals, vote breakdown, leaderboard.
+9. **Next round or end.** `advance` from `reveal`: if `currentRound >= settings.rounds` → status `ended`, broadcast `game-ended` with final scores. Else → `generateRoundTarget` runs again (FLUX + CLIP for round N+1's target), loop back to step 6.
 
-Round state machine in Redis: `lobby → generating → countdown(3) → playing(60) → reveal(15) → (next round | ended)`. The `generating` phase masks FLUX cold-start before the timer starts so players never wait on a black screen. Server-authoritative timer, broadcast tick events.
+### State machine
+
+```
+lobby
+  ↓ start
+generating ───────── (FLUX + CLIP target gen, ~2s)
+  ↓ on success
+playing  ─────────── (settings.timer s; players submit + pick)
+  ↓ advance (after phaseEndsAt)
+voting   ─────────── (20s; vote on others' finals)
+  ↓ advance (after phaseEndsAt)
+reveal   ─────────── (15s; targetPrompt + scores broadcast)
+  ↓ advance (after phaseEndsAt)
+{ next round → generating  OR  ended }
+```
+
+`phaseEndsAt` is server-stamped on every transition with a timer. Clients render `Math.max(0, phaseEndsAt - Date.now())` and call `advance` when it hits zero. Server rejects early calls with 409 + the real `phaseEndsAt` — clients can't shave time.
+
+### Pusher events
+
+| Event | When | Payload (key fields) |
+|---|---|---|
+| `player-joined` / `player-left` | join/leave action | `{ userId, name, avatarSeed, role }` |
+| `player-ready` | ready/unready | `{ userId, ready }` |
+| `settings-updated` | host changes settings | `{ settings }` |
+| `round-generating` | start of any round | `{ status, round }` |
+| `round-starting` | FLUX+CLIP done | `{ status, round, targetImageUrl, category, phaseEndsAt }` |
+| `round-failed` | FLUX/CLIP throws | `{ error }` (room reverts to lobby) |
+| `attempt-submitted` | each gen completes | full `Attempt` |
+| `pick-changed` | player picks/repicks | `{ userId, round }` (value private) |
+| `voting-starting` | playing → voting | `{ status, round, phaseEndsAt }` |
+| `vote-submitted` | each vote received | `{ voterId, round }` (value private) |
+| `reveal-starting` | voting → reveal | `{ status, round, phaseEndsAt, targetPrompt, scores }` |
+| `game-ended` | last round reveal ends | `{ status, scores }` |
 
 ## Conventions
 
@@ -241,10 +322,10 @@ Round state machine in Redis: `lobby → generating → countdown(3) → playing
 - 4-letter room codes via nanoid custom alphabet, no profanity, no `0/O 1/I`.
 - zod schemas on every API input.
 - 1h TTL on every Redis key.
-- `tokens = Math.ceil(prompt.length / 4)` — no real tokenizer, only a tiebreak proxy.
-- Anti-cheese: reject `> promptMaxLength` chars, debounce identical resubmits within 3s.
-- Target prompt never sent to client — only image URL — until the reveal payload.
-- Pre-warm fal: dummy generation request fires when lobby mounts (mask cold start).
+- `tokens = Math.ceil(prompt.length / 4)` — no real tokenizer; only meaningful as a deep-tiebreak rung.
+- Anti-cheese: reject prompts >`promptMaxLength`, per-player 3s debounce on `/generate` via Redis NX-EX, per-round attempt cap (`attemptsPerRound`).
+- `targetPrompt` and `targetEmbedding` never sent to client; `targetPrompt` only surfaces on the `reveal-starting` Pusher event.
+- Pre-warm fal: dummy generation request when lobby mounts (mask cold start). Replicate cold-start (~5–30s on first round) is a tracked risk — keep CLIP warm by hitting it during lobby idle.
 - Disconnect grace: Pusher `member_removed` flips `connected: false` + sets `lastSeenAt`; server-side timer DNFs the player only if they don't return within `disconnectGraceMs` (30s default). Host succession runs off the same event using `joinedAt` order.
 - Per-room rate limit, $20 hard cap, debounce to keep cost bounded.
 

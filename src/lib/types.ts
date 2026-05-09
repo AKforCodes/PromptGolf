@@ -6,6 +6,8 @@ export const RoomSettings = z.object({
   maxPlayers: z.number().int().min(1).max(8).default(8),
   timer: z.number().int().min(30).max(120).default(60),
   promptMaxLength: z.number().int().min(50).max(200).default(200),
+  // Each player gets up to N FLUX submissions per round. Capped at 5 to bound cost.
+  attemptsPerRound: z.number().int().min(1).max(5).default(3),
   category: z.enum(["animals", "landmarks", "foods", "nature", "characters"]).default("animals"),
   difficulty: z.enum(["easy", "normal", "hard"]).default("normal"),
 })
@@ -30,10 +32,23 @@ export const RoomStatus = z.enum([
   "generating",
   "countdown",
   "playing",
+  "voting",
   "reveal",
   "ended",
 ])
 export type RoomStatus = z.infer<typeof RoomStatus>
+
+export const VoteValue = z.enum(["bad", "ok", "good", "excellent"])
+export type VoteValue = z.infer<typeof VoteValue>
+
+export const Vote = z.object({
+  voterId: z.string(),
+  targetId: z.string(),
+  value: VoteValue,
+  submittedAt: z.number(),
+})
+
+export type Vote = z.infer<typeof Vote>
 
 export const RoomState = z.object({
   code: z.string(),
@@ -50,6 +65,18 @@ export const RoomState = z.object({
   targetImageUrl: z.string().nullable().default(null),
   targetPrompt: z.string().nullable().default(null),
   targetEmbedding: z.array(z.number()).nullable().default(null),
+  // Cumulative score per player across rounds: CLIP points (60 × best similarity) + vote points.
+  // DNFs contribute 0 CLIP but can still receive vote points.
+  scores: z.record(z.string(), z.number()).default({}),
+  // Player picks for the current round: userId → attemptId. The picked attempt
+  // is the player's "final submission" — it's what gets scored for CLIP and
+  // shown to voters. Cleared on each new round. If a player doesn't pick by
+  // playing → voting transition, the server falls back to their best attempt.
+  picks: z.record(z.string(), z.string()).default({}),
+  // Server-stamped deadline for the current phase (epoch ms). Clients render
+  // a countdown to this value and auto-fire `advance` when it elapses.
+  // Null in `lobby` and `ended`; null transiently while `generating`.
+  phaseEndsAt: z.number().nullable().default(null),
   createdAt: z.number(),
 })
 

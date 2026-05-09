@@ -95,54 +95,36 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 
 ## Stage 4 — Showdown loop (Hr 6–14) — A + B
 
-**Composing primitives.** The scoring/gen building blocks are already shipped (`lib/fal.ts`, `lib/replicate.ts`, `lib/scoring.ts`). The two API routes below are now compositions of existing functions, no new external integration:
+### ✅ Backend shipped 2026-05-09
 
-```ts
-// /api/round/start
-const { imageUrl: targetImageUrl } = await falGenerate(category.prompt, seed)
-const targetEmbedding = await clipEmbed(targetImageUrl)
-// persist {targetImageUrl, targetEmbedding, seed} on RoomState
+The full server-side round arc is in. State machine: `lobby → generating → playing → voting → reveal → (next round | ended)`. Phase advances are client-driven via `POST { action: "advance" }` against a server-stamped `phaseEndsAt`.
 
-// /api/generate
-const { imageUrl: candidateUrl } = await falGenerate(playerPrompt, room.seed)
-const candidateEmbedding = await clipEmbed(candidateUrl)
-const similarity = cosine(room.targetEmbedding, candidateEmbedding)
-const ok = qualifies(similarity, room.settings.threshold ?? 0.88)
-```
+- **`POST /api/v1/rooms/[code] { action: "start" }`** — host-only. Validations + delegates to `generateRoundTarget` helper (FLUX → CLIP → cache on RoomState → flip to playing with `phaseEndsAt = now + settings.timer * 1000`). On FLUX/CLIP failure, reverts to lobby and broadcasts `round-failed`.
+- **`POST /api/v1/rooms/[code] { action: "advance" }`** — anyone in room. Server validates `Date.now() >= phaseEndsAt` (rejects 409 with the real deadline if early). State machine: `playing → voting (20s)`, `voting → reveal (15s)` (runs `selectFinalAttempts(attempts, picks)` → `awardRoundScores(scores, finals, votes)` → broadcasts `targetPrompt` + `scores`), `reveal → next round | ended` (next round re-runs `generateRoundTarget`).
+- **`POST /api/v1/rooms/[code] { action: "pick", attemptId }`** — locks player's "final" attempt for the round. Verifies attempt belongs to caller. Changeable any time during playing. Broadcast `pick-changed { userId }` (value private).
+- **`POST /api/v1/generate { roomCode, prompt }`** — player submission. Per-round attempts cap (`settings.attemptsPerRound`) + per-player 3s debounce (atomic Redis NX-EX). Composes `falGenerate → clipEmbed → cosine → qualifies`. Persists `Attempt` to `room:{CODE}:attempts:{round}`. Broadcast `attempt-submitted`. Returns `{ attempt, attemptsRemaining }`.
+- **`POST /api/v1/vote { roomCode, targetUserId, value }`** — anti-self-vote, one vote per target per round. Persists `Vote` to `room:{CODE}:votes:{round}`. Broadcast `vote-submitted { voterId, round }` (value private).
+- **`GET /api/v1/rooms/[code]/round/[n]`** — for voting carousel + reveal screen. Returns `{ finalAttempts, votes, targetImageUrl, targetPrompt? }`. `targetPrompt` only when status ∈ {reveal, ended}.
 
-**A — server**
-- `/api/round/start` POST `{roomCode}` (host-only):
-  1. Validate caller is host via cookie playerId
-  2. Pick category from `room.settings.category` (or rotate through if multi-category)
-  3. Look up category's prompt in `data/categories.json` via `/lib/targets.ts`
-  4. Pick fresh `seed` from category's `seedRange`
-  5. fal FLUX schnell with category prompt + seed → `targetImageUrl`
-  6. **Embed target once via `clipEmbed(targetImageUrl)` → 768d `targetEmbedding`. Cache on `RoomState.targetEmbedding`.** This is the keystone of the per-submission cost model: target is embedded once, reused for every player's cosine.
-  7. Write round state into `RoomState`, flip status `lobby|reveal → generating → countdown`
-  8. Broadcast `round-starting` over Pusher with `{targetImageUrl, category}` — never `targetPrompt`, never `targetEmbedding`. Category id is safe to send: it's a genre hint, not the answer key. Knowing the prompt verbatim doesn't help players golf — the char-count tiebreak punishes long prompts even if they hit threshold.
-  9. Server timer drives `countdown(3) → playing(60) → reveal(15)`
-- `/api/generate` POST `{roomCode, prompt}` (player submission):
-  1. Validate cookie playerId is in room, status === `playing`, prompt len ≤ `room.settings.promptMaxLength`, debounce 3s
-  2. Fetch `RoomState` → reuse the round's `seed` so player's gen and target gen share latent space
-  3. fal FLUX schnell with player's prompt + seed → candidate image url
-  4. `clipEmbed(candidateImageUrl)` → 768d candidate embedding
-  5. `similarity = cosine(targetEmbedding, candidateEmbedding)` — pure JS, no extra API call
-  6. Compute `{chars, tokens: Math.ceil(prompt.length / 4), qualified: similarity >= room.settings.threshold (default 0.88), rank}`
-  7. Append `Attempt` to `room:{CODE}:attempts:{round}` in Redis (read → push → write)
-  8. Broadcast via Pusher `attempt-submitted`
-  9. Return result to caller
-- Round state machine in Redis: `lobby → generating → countdown(3) → playing(60) → reveal(15) → (next round | ended)`
-- Server-authoritative timer, broadcast tick events
-- Reveal payload includes `targetPrompt` (the only time it leaves the server)
-- Anti-cheese: reject >200 chars, debounce identical resubmits
-- Disconnect handling: Pusher webhook → flip `connected: false` + `lastSeenAt = now()`. Server reaper checks at round end: if `!connected && now - lastSeenAt > disconnectGraceMs`, treat as DNF for the current round.
+**Scoring formula (in `lib/scoring.ts`):** `clipPoints = qualified ? round(60 × similarity) : 0`. Vote points: bad/ok/good/excellent = 0/3/6/10. `awardRoundScores(scores, finalAttempts, votes)` accumulates onto `room.scores`. `selectFinalAttempts(attempts, picks)` resolves picks → fallback to highest-similarity-qualified → fallback to highest-similarity overall.
 
-**B — UI**
-- Target image reveal w/ countdown
-- `<PromptInput>` — live char counter, color shifts as cap approaches
-- Submit → skeleton → image fades in → score animates count-up
-- `<Leaderboard>` — qualified players sorted by char count, DNF below, rank pills
-- `<RevealScreen>` — target left, attempts stagger in by stroke order, prompts revealed last, fanfare
+**Validated end-to-end via:**
+- Smoke test (now deleted): `/api/smoke/round-start` confirmed FLUX + CLIP composition at ~2.8s wall time.
+- Unit tests: 61 vitest cases in `src/lib/__tests__/scoring.test.ts` covering cosine, qualifies, tiebreak, selectFinalAttempts (6 cases), awardRoundScores (8 cases including the "60 + 4 excellents = 100" spec example).
+
+### Still to do for Stage 4
+
+**A — server, ~30 min each:**
+- Disconnect grace: Pusher `member_removed` webhook → flip `connected: false` + `lastSeenAt = now()`. At round-end, DNF anyone with `!connected && now - lastSeenAt > disconnectGraceMs` (30s).
+- Host succession: when host leaves, promote next player by `joinedAt`.
+- Pre-warm fal: dummy gen request when lobby mounts (mask cold start).
+
+**B — UI (this is where the rest lives):**
+- Client-side countdown to `room.phaseEndsAt`. Auto-fire `POST { action: "advance" }` when it hits 0.
+- Playing-phase UI: target image, prompt input (live char counter), submit, attempt cards with "pick this one" button, "X attempts left" badge.
+- Voting-phase UI: carousel of other players' final attempts (fetched via `GET .../round/[n]`), 4 vote buttons per target (bad/ok/good/excellent), one vote per target.
+- Reveal-phase UI: secret target prompt revealed, per-player finals + per-round score breakdown (CLIP points + vote points), running cumulative leaderboard.
+- Game-end UI: final scores, share card link.
 
 ---
 

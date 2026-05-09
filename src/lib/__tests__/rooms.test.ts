@@ -14,6 +14,7 @@ const mockSettings: RoomSettings = {
   maxPlayers: 8,
   timer: 60,
   promptMaxLength: 200,
+  attemptsPerRound: 3,
   category: "animals",
   difficulty: "normal",
 }

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest"
-import { cosine, qualifies, tiebreak } from "../scoring"
+import {
+  cosine,
+  qualifies,
+  tiebreak,
+  awardRoundScores,
+  selectFinalAttempts,
+} from "../scoring"
 
 describe("cosine", () => {
   it("returns 1 for identical vectors", () => {
@@ -85,5 +91,151 @@ describe("tiebreak", () => {
     const original = [...input]
     tiebreak(input)
     expect(input).toEqual(original)
+  })
+})
+
+describe("selectFinalAttempts", () => {
+  it("returns the explicit pick when set", () => {
+    const finals = selectFinalAttempts(
+      [
+        { id: "a1", userId: "alice", similarity: 0.95, qualified: true },
+        { id: "a2", userId: "alice", similarity: 0.7, qualified: false },
+      ],
+      { alice: "a2" }
+    )
+    expect(finals).toHaveLength(1)
+    expect(finals[0].id).toBe("a2")
+  })
+
+  it("falls back to highest-similarity qualified when no pick", () => {
+    const finals = selectFinalAttempts(
+      [
+        { id: "a1", userId: "alice", similarity: 0.91, qualified: true },
+        { id: "a2", userId: "alice", similarity: 0.95, qualified: true },
+        { id: "a3", userId: "alice", similarity: 0.99, qualified: false },
+      ],
+      {}
+    )
+    expect(finals[0].id).toBe("a2")
+  })
+
+  it("falls back to highest-similarity overall when no qualified", () => {
+    const finals = selectFinalAttempts(
+      [
+        { id: "a1", userId: "alice", similarity: 0.5, qualified: false },
+        { id: "a2", userId: "alice", similarity: 0.7, qualified: false },
+      ],
+      {}
+    )
+    expect(finals[0].id).toBe("a2")
+  })
+
+  it("returns one per player across multiple players", () => {
+    const finals = selectFinalAttempts(
+      [
+        { id: "a1", userId: "alice", similarity: 0.95, qualified: true },
+        { id: "a2", userId: "alice", similarity: 0.85, qualified: true },
+        { id: "b1", userId: "bob", similarity: 0.9, qualified: true },
+      ],
+      { alice: "a2" }
+    )
+    expect(finals).toHaveLength(2)
+    expect(finals.find((a) => a.userId === "alice")?.id).toBe("a2")
+    expect(finals.find((a) => a.userId === "bob")?.id).toBe("b1")
+  })
+
+  it("ignores stale pick id (player deleted attempt or wrong id)", () => {
+    const finals = selectFinalAttempts(
+      [{ id: "a1", userId: "alice", similarity: 0.9, qualified: true }],
+      { alice: "non-existent-id" }
+    )
+    // Falls back to best-qualified (a1) instead of failing
+    expect(finals[0].id).toBe("a1")
+  })
+
+  it("returns empty when no attempts", () => {
+    expect(selectFinalAttempts([], { alice: "a1" })).toEqual([])
+  })
+})
+
+describe("awardRoundScores", () => {
+  it("awards CLIP points (60 × similarity) for one final per player", () => {
+    const next = awardRoundScores({}, [
+      { userId: "alice", similarity: 0.95, qualified: true },
+      { userId: "bob", similarity: 0.9, qualified: true },
+    ])
+    expect(next).toEqual({ alice: 57, bob: 54 })
+  })
+
+  it("DNF (qualified=false) contributes 0 CLIP", () => {
+    const next = awardRoundScores({}, [
+      { userId: "alice", similarity: 1.0, qualified: true },
+      { userId: "bob", similarity: 0.7, qualified: false },
+    ])
+    expect(next).toEqual({ alice: 60, bob: 0 })
+  })
+
+  it("accumulates onto existing scores across rounds", () => {
+    const round1 = awardRoundScores({}, [
+      { userId: "alice", similarity: 0.9, qualified: true }, // 54
+    ])
+    const round2 = awardRoundScores(round1, [
+      { userId: "alice", similarity: 0.85, qualified: true }, // 51
+      { userId: "bob", similarity: 0.92, qualified: true }, // 55
+    ])
+    expect(round2).toEqual({ alice: 54 + 51, bob: 55 })
+  })
+
+  it("does not mutate the input scores", () => {
+    const before = { alice: 50 }
+    const snapshot = { ...before }
+    awardRoundScores(before, [
+      { userId: "alice", similarity: 0.95, qualified: true },
+    ])
+    expect(before).toEqual(snapshot)
+  })
+
+  it("adds vote points: spec example (60 CLIP + 4 excellents = 100)", () => {
+    const next = awardRoundScores(
+      {},
+      [{ userId: "alice", similarity: 1.0, qualified: true }],
+      [
+        { targetId: "alice", value: "excellent" },
+        { targetId: "alice", value: "excellent" },
+        { targetId: "alice", value: "excellent" },
+        { targetId: "alice", value: "excellent" },
+      ]
+    )
+    expect(next).toEqual({ alice: 100 })
+  })
+
+  it("vote points scale: bad/ok/good/excellent = 0/3/6/10", () => {
+    const next = awardRoundScores({}, [], [
+      { targetId: "alice", value: "bad" },
+      { targetId: "alice", value: "ok" },
+      { targetId: "alice", value: "good" },
+      { targetId: "alice", value: "excellent" },
+    ])
+    expect(next).toEqual({ alice: 0 + 3 + 6 + 10 })
+  })
+
+  it("DNF players still receive vote points (carousel rule)", () => {
+    const next = awardRoundScores(
+      {},
+      [{ userId: "bob", similarity: 0.5, qualified: false }],
+      [
+        { targetId: "bob", value: "excellent" },
+        { targetId: "bob", value: "good" },
+      ]
+    )
+    // 0 CLIP (DNF) + 10 + 6 = 16
+    expect(next).toEqual({ bob: 16 })
+  })
+
+  it("votes default to empty when omitted", () => {
+    const next = awardRoundScores({}, [
+      { userId: "alice", similarity: 0.9, qualified: true },
+    ])
+    expect(next).toEqual({ alice: 54 })
   })
 })
