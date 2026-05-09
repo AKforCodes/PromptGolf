@@ -8,21 +8,23 @@ Jackbox-style party game. Players see a target image, race to write the shortest
 
 | Area | Decision |
 |---|---|
-| Game mode v1 | Showdown only (multiplayer race, 60s timer) |
+| Game mode v1 | Showdown only (multiplayer race, configurable timer) |
 | Modality | Image targets, FLUX schnell @ 4 steps, fixed seed per round |
-| Target source | On-demand FLUX gen per round. Host picks one or more categories at lobby creation; **each category has a single pre-defined FLUX prompt** in `data/categories.json`. Round variety comes from a fresh seed each round, not prompt mixing. |
 | Scoring | Threshold gate (CLIP ≥0.78) + char count tiebreak |
 | Tiebreak ladder | char count → token count → CLIP score → submission timestamp |
-| Length unit | Chars primary, tokens secondary (`Math.ceil(prompt.length / 4)` estimate, no real tokenizer) |
+| Length unit | Chars primary, tokens secondary |
 | CLIP location | Server-side via fal endpoint (no transformers.js — bundle risk on mobile) |
-| Rounds per game | 3 default, host can extend up to 5 |
-| Lobby size | Host-configurable, capped at 8 (Pusher free tier) |
-| Auth | Anon. `playerId` minted on landing, stored in cookie. Name + DiceBear avatar editable on landing. |
+| Rounds per game | 1–5, default 3 |
+| Max players | 1–8, default 8 |
+| Prompt max length | 50–200 chars, default 200 |
+| Timer | 30–120s, default 60 |
+| Categories | animals, landmarks, food, celebrity, logos |
+| Auth | Anon, user_id cookie + DiceBear avatar |
 | Persistence | Upstash Redis only, 1hr TTL, no SQL |
-| Realtime | Pusher (presence + private channels) |
-| Disconnect grace | 30s — Pusher `member_removed` flips `connected: false`, server DNFs only if not back in 30s |
+| Realtime | Pusher (presence + private channels, pub/sub) |
+| Role assignment | First N joiners = prompter, rest = spectator (host can swap) |
 | Voice commentary | DROPPED — spectator + share card win the hour |
-| Anti-cheese | 200-char prompt cap, 3s resubmit debounce, target prompt never sent to client |
+| Anti-cheese | Prompt max length cap, 3s resubmit debounce, target prompt never sent to client |
 | Demo first | Every decision biases toward live-on-stage moment |
 
 ## Stack

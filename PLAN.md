@@ -52,7 +52,7 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 - `/lib/session.ts` — `getOrMintPlayerId()` reads/writes httpOnly cookie; called by every API route + landing page
 - `/lib/rooms.ts` — Redis CRUD: `createRoom`, `joinRoom`, `leaveRoom`, `getState`, `setState`. Every write increments `Room.version`.
 - 4-letter code via nanoid custom alphabet, no profanity, no `0/O 1/I`
-- `/api/rooms` POST create — body: `{ maxPlayers, categories, totalRounds }`. Returns `{ code }`.
+- `/api/rooms` POST create — body: `{ maxPlayers: 1–8, categories, totalRounds: 1–5, timer: 30–120, promptMaxLength: 50–200 }`. Returns `{ code }`.
 - `/api/rooms/[code]` GET state, POST join/leave. Every body carries `roomCode` (per convention) — but the path param `[code]` is the source of truth; body `roomCode` must match or 400.
 - `/api/pusher/auth` presence + private auth, validates cookie playerId is in the room
 - zod schemas on every input
@@ -65,7 +65,7 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 - `/` landing:
   - On first visit, server mints `playerId` cookie + default name (`Guest-XXXX`) + random `avatarSeed`
   - Editable name input + DiceBear avatar preview (re-rolls seed on click)
-  - `[CREATE LOBBY]` opens dialog: max-players slider (2–8), category multi-select from `data/categories.json`, total rounds 3/4/5
+  - `[CREATE LOBBY]` opens dialog: max-players slider (1–8), category multi-select from `data/categories.json`, total rounds 1/2/3/4/5, timer 30–120s, prompt max length 50–200
   - `[JOIN: ____]` 4-char input → `/room/[code]`
 - `/room/[code]` lobby:
   - DiceBear avatars (URL with `seed = avatarSeed`, not `playerId`, so re-rolls work)
@@ -90,7 +90,7 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
   7. Broadcast `round-starting` over Pusher with `{targetImageUrl, category}` — never `targetPrompt`. Category id is safe to send: it's a genre hint, not the answer key. Knowing the prompt verbatim doesn't help players golf — the char-count tiebreak punishes long prompts even if they hit threshold.
   8. Server timer drives `countdown(3) → playing(60) → reveal(15)`
 - `/api/generate` POST `{roomCode, prompt}` (player submission):
-  1. Validate cookie playerId is in room, status === `playing`, prompt len ≤200, debounce 3s
+   1. Validate cookie playerId is in room, status === `playing`, prompt len ≤ `room.settings.promptMaxLength`, debounce 3s
   2. Fetch `room.round` → reuse the round's `seed` so player's gen and target gen share latent space
   3. fal FLUX schnell with player's prompt + seed → image url
   4. fal CLIP target_image vs generated → similarity
@@ -191,7 +191,7 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 | CLIP threshold mis-tuned | MED | Stage 1 calibration on 5 live-gen targets across categories. Show live sim score so players self-tune. |
 | Category produces unrecognizable images | MED | Person C tests each category 5× during Hr 0–4. Mark `demoSafe: true` only after passing. Demo defaults to safe categories. |
 | Demo Wi-Fi flakes | HIGH | Hotspot backup. Pre-recorded video fallback. |
-| Pusher free tier cap | MED | Cap rooms to 8 players (`config.maxPlayers`). One demo room only. |
+| Pusher free tier cap | MED | Cap rooms to 8 players (`settings.maxPlayers`). One demo room only. |
 | Mobile keyboard covers UI | MED | Test Hr 6 not Hr 22. Sticky input bar. |
 | Cost runaway from on-demand gen | MED | Was LOW with pre-gen targets — bumped because every round is now a paid call. Per-room rate limit, $20 hard cap, debounce. Cap rooms per session. |
 | Host disconnects mid-game | MED | 30s grace via `disconnectGraceMs`. On expiry, promote next player by `joinedAt` order. |
