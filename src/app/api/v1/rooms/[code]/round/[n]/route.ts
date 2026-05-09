@@ -9,7 +9,7 @@ import type { Attempt, Vote } from "@/lib/types";
 //
 // Returns the data the voting and reveal screens need:
 //   - finalAttempts: one Attempt per player (their pick, or fallback to
-//     best-qualified, then highest-similarity). This is the voting carousel.
+//     last-submitted). This is the voting carousel.
 //   - votes: all votes cast for this round.
 //   - targetImageUrl: the round's target image (always available once round
 //     has reached playing).

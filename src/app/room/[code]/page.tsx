@@ -34,9 +34,9 @@ import { PlayersCard } from "@/components/lobby/players-card";
 import { RoundSummaryCard } from "@/components/lobby/round-summary-card";
 import { ShareCard } from "@/components/lobby/share-card";
 import { PlayingView } from "@/components/play/playing-view";
+import { RoundLoadingView } from "@/components/play/round-loading-view";
 import {
   EndedView,
-  GeneratingView,
   RevealView,
   VotingView,
 } from "@/components/play/phase-views";
@@ -377,13 +377,7 @@ function RoomLobby({ code }: { code: string }) {
   }
 
   if (roomState.status === "generating") {
-    return (
-      <GeneratingView
-        roomState={roomState}
-        userId={userId}
-        onLeave={handleLeave}
-      />
-    );
+    return <RoundLoadingView roomState={roomState} onLeave={handleLeave} />;
   }
 
   if (roomState.status === "playing" || roomState.status === "countdown") {

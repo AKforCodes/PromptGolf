@@ -55,31 +55,6 @@ function CountdownStrip({ secondsLeft }: { secondsLeft: number }) {
   );
 }
 
-export function GeneratingView({ roomState, userId, onLeave }: PhaseProps) {
-  return (
-    <main className="flex flex-1 flex-col px-4 py-6">
-      <div className="mx-auto w-full max-w-3xl">
-        <PhaseHeader
-          roomState={roomState}
-          userId={userId}
-          onLeave={onLeave}
-          pillLabel="Loading"
-          pillBg="bg-sky"
-        />
-        <Card className="flex flex-col items-center py-16 text-center">
-          <div className="mb-4 text-6xl">🎨</div>
-          <h2 className="font-heading text-2xl font-bold uppercase tracking-wide">
-            Generating round target…
-          </h2>
-          <p className="mt-2 font-heading text-sm text-ink/60">
-            FLUX is painting · CLIP is measuring · hold tight
-          </p>
-        </Card>
-      </div>
-    </main>
-  );
-}
-
 export function VotingView({ roomState, userId, onLeave }: PhaseProps) {
   const secondsLeft = usePhaseCountdown(roomState.phaseEndsAt);
 
