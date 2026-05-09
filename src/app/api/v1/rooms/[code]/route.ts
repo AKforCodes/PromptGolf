@@ -94,6 +94,7 @@ export async function POST(
 
     const { room: updatedRoom, role } = await joinRoom(room, player)
 
+
     await pusher.trigger(`presence-room-${code}`, "player-joined", {
       userId,
       name,
