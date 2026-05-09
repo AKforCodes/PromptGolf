@@ -6,9 +6,7 @@ import { pusher } from "@/lib/pusher"
 import { redis } from "@/lib/redis"
 import { getRoom } from "@/lib/rooms"
 import { falGenerate } from "@/lib/fal"
-import { clipEmbed } from "@/lib/replicate"
-import { cosine, qualifies } from "@/lib/scoring"
-import type { RoomSettings, Attempt } from "@/lib/types"
+import type { Attempt } from "@/lib/types"
 
 const ATTEMPT_TTL = 3600
 const DEBOUNCE_SECONDS = 3
@@ -19,16 +17,6 @@ const GenerateInput = z.object({
   roomCode: z.string().length(4),
   prompt: z.string().min(1).max(200),
 })
-
-// Difficulty → CLIP threshold. Calibrated against the 768d
-// openai/clip-vit-large-patch14 model: image-image cosine has a high floor
-// (~0.85 for unrelated natural photos), so qualifying scores cluster in
-// 0.86–0.95. Tune per category if needed.
-const DIFFICULTY_THRESHOLD: Record<RoomSettings["difficulty"], number> = {
-  easy: 0.86,
-  normal: 0.88,
-  hard: 0.92,
-}
 
 function attemptsKey(code: string, round: number): string {
   return `room:${code}:attempts:${round}`
@@ -68,7 +56,7 @@ export async function POST(request: Request) {
       { status: 400 }
     )
   }
-  if (!room.targetEmbedding || room.seed == null) {
+  if (room.seed == null) {
     return NextResponse.json({ error: "round target not ready" }, { status: 503 })
   }
 
@@ -100,19 +88,18 @@ export async function POST(request: Request) {
 
   try {
     // Reuse the round's seed so the candidate generation lives in the same
-    // FLUX latent space as the target — comparable scoring.
+    // FLUX latent space as the target.
     const { imageUrl: candidateUrl } = await falGenerate(prompt, room.seed)
-    const candidateEmbedding = await clipEmbed(candidateUrl)
-    const similarity = cosine(room.targetEmbedding, candidateEmbedding)
-    const threshold = DIFFICULTY_THRESHOLD[room.settings.difficulty]
 
+    // similarity/qualified are vestigial — kept on the schema for forward-compat
+    // in case CLIP scoring is reintroduced. Defaults are 0/false.
     const attempt: Attempt = {
       id: nanoidShort(),
       userId,
       prompt,
       imageUrl: candidateUrl,
-      similarity,
-      qualified: qualifies(similarity, threshold),
+      similarity: 0,
+      qualified: false,
       chars: prompt.length,
       tokens: Math.ceil(prompt.length / 4),
       submittedAt: Date.now(),

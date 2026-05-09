@@ -32,9 +32,11 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 
 ---
 
-## Stage 1 — Threshold + bot (Hr 2–3) — A ⚠️ CRITICAL → ✅ DONE 2026-05-09
+## Stage 1 — Threshold + bot (Hr 2–3) — ⚠️ SUPERSEDED 2026-05-09
 
-**Status:** scoring path validated via `src/app/api/smoke/replicate-clip/route.ts`. fal CLIP path was investigated and rejected (only fal endpoint exposing image embeddings is SAM-3, which is a 1.3M-dim segmentation feature map — doesn't discriminate semantic similarity). Pivoted to **Replicate `andreasjansson/clip-features`** (version-pinned), which returns the standard openai/clip-vit-large-patch14 768-dim embedding. Calibration result on 4-image test (red apple target, identical regen, fuzzy "red apple on table", wrong "yellow banana on grass"):
+**CLIP scoring was dropped on 2026-05-09 in favour of pure player voting.** This stage's threshold-calibration work is preserved below for historical context, but none of it is in the live game anymore. `lib/replicate.ts` was deleted; `lib/scoring.ts` no longer exports `cosine`/`qualifies`/`clipPoints`. See CLAUDE.md → Locked Decisions for the new scoring rule.
+
+### Historical: scoring path was validated via `src/app/api/smoke/replicate-clip/route.ts`. fal CLIP path was investigated and rejected (only fal endpoint exposing image embeddings is SAM-3, which is a 1.3M-dim segmentation feature map — doesn't discriminate semantic similarity). Pivoted to **Replicate `andreasjansson/clip-features`** (version-pinned), which returns the standard openai/clip-vit-large-patch14 768-dim embedding. Calibration result on 4-image test (red apple target, identical regen, fuzzy "red apple on table", wrong "yellow banana on grass"):
 
 | Pair | Cosine | Notes |
 |---|---|---|
@@ -95,22 +97,22 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 
 ## Stage 4 — Showdown loop (Hr 6–14) — A + B
 
-### ✅ Backend shipped 2026-05-09
+### ✅ Backend shipped 2026-05-09 (vote-only scoring)
 
 The full server-side round arc is in. State machine: `lobby → generating → playing → voting → reveal → (next round | ended)`. Phase advances are client-driven via `POST { action: "advance" }` against a server-stamped `phaseEndsAt`.
 
-- **`POST /api/v1/rooms/[code] { action: "start" }`** — host-only. Validations + delegates to `generateRoundTarget` helper (FLUX → CLIP → cache on RoomState → flip to playing with `phaseEndsAt = now + settings.timer * 1000`). On FLUX/CLIP failure, reverts to lobby and broadcasts `round-failed`.
+- **`POST /api/v1/rooms/[code] { action: "start" }`** — host-only. Validations + delegates to `generateRoundTarget` helper (FLUX target gen → cache on RoomState → flip to playing with `phaseEndsAt = now + settings.timer * 1000`). On FLUX failure, reverts to lobby and broadcasts `round-failed`.
 - **`POST /api/v1/rooms/[code] { action: "advance" }`** — anyone in room. Server validates `Date.now() >= phaseEndsAt` (rejects 409 with the real deadline if early). State machine: `playing → voting (20s)`, `voting → reveal (15s)` (runs `selectFinalAttempts(attempts, picks)` → `awardRoundScores(scores, finals, votes)` → broadcasts `targetPrompt` + `scores`), `reveal → next round | ended` (next round re-runs `generateRoundTarget`).
 - **`POST /api/v1/rooms/[code] { action: "pick", attemptId }`** — locks player's "final" attempt for the round. Verifies attempt belongs to caller. Changeable any time during playing. Broadcast `pick-changed { userId }` (value private).
-- **`POST /api/v1/generate { roomCode, prompt }`** — player submission. Per-round attempts cap (`settings.attemptsPerRound`) + per-player 3s debounce (atomic Redis NX-EX). Composes `falGenerate → clipEmbed → cosine → qualifies`. Persists `Attempt` to `room:{CODE}:attempts:{round}`. Broadcast `attempt-submitted`. Returns `{ attempt, attemptsRemaining }`.
+- **`POST /api/v1/generate { roomCode, prompt }`** — player submission. Per-round attempts cap (`settings.attemptsPerRound`) + per-player 3s debounce (atomic Redis NX-EX). Calls `falGenerate(prompt, room.seed)` only — no CLIP. Persists `Attempt` (with placeholder `similarity: 0, qualified: false`) to `room:{CODE}:attempts:{round}`. Broadcast `attempt-submitted`. Returns `{ attempt, attemptsRemaining }`.
 - **`POST /api/v1/vote { roomCode, targetUserId, value }`** — anti-self-vote, one vote per target per round. Persists `Vote` to `room:{CODE}:votes:{round}`. Broadcast `vote-submitted { voterId, round }` (value private).
 - **`GET /api/v1/rooms/[code]/round/[n]`** — for voting carousel + reveal screen. Returns `{ finalAttempts, votes, targetImageUrl, targetPrompt? }`. `targetPrompt` only when status ∈ {reveal, ended}.
 
-**Scoring formula (in `lib/scoring.ts`):** `clipPoints = qualified ? round(60 × similarity) : 0`. Vote points: bad/ok/good/excellent = 0/3/6/10. `awardRoundScores(scores, finalAttempts, votes)` accumulates onto `room.scores`. `selectFinalAttempts(attempts, picks)` resolves picks → fallback to highest-similarity-qualified → fallback to highest-similarity overall.
+**Scoring formula (in `lib/scoring.ts`):** vote-only. `VOTE_POINTS = { bad: 0, ok: 3, good: 6, excellent: 10 }`. `awardRoundScores(scores, _finals, votes)` sums vote points per `targetId` and accumulates onto `room.scores`. `selectFinalAttempts(attempts, picks)` resolves picks → fallback to last-submitted attempt.
 
-**Validated end-to-end via:**
-- Smoke test (now deleted): `/api/smoke/round-start` confirmed FLUX + CLIP composition at ~2.8s wall time.
-- Unit tests: 61 vitest cases in `src/lib/__tests__/scoring.test.ts` covering cosine, qualifies, tiebreak, selectFinalAttempts (6 cases), awardRoundScores (8 cases including the "60 + 4 excellents = 100" spec example).
+**CLIP scoring was investigated, validated, and dropped** in favour of pure social voting (team call). `lib/replicate.ts` deleted; `Attempt.similarity`/`qualified` and `RoomSettings.difficulty` are vestigial fields. The Replicate calibration data and SAM-3 dead-end are documented in Stage 1 (above) for historical context.
+
+**Tests:** 59 vitest cases in `src/lib/__tests__/scoring.test.ts` covering tiebreak (4), selectFinalAttempts (5), awardRoundScores (6) — including the "4 excellents = 40" spec example.
 
 ### Still to do for Stage 4
 
@@ -123,7 +125,7 @@ The full server-side round arc is in. State machine: `lobby → generating → p
 - Client-side countdown to `room.phaseEndsAt`. Auto-fire `POST { action: "advance" }` when it hits 0.
 - Playing-phase UI: target image, prompt input (live char counter), submit, attempt cards with "pick this one" button, "X attempts left" badge.
 - Voting-phase UI: carousel of other players' final attempts (fetched via `GET .../round/[n]`), 4 vote buttons per target (bad/ok/good/excellent), one vote per target.
-- Reveal-phase UI: secret target prompt revealed, per-player finals + per-round score breakdown (CLIP points + vote points), running cumulative leaderboard.
+- Reveal-phase UI: secret target prompt revealed, per-player finals + per-round vote breakdown, running cumulative leaderboard.
 - Game-end UI: final scores, share card link.
 
 ---
@@ -202,9 +204,8 @@ The full server-side round arc is in. State machine: `lobby → generating → p
 | Risk | Severity | Mitigation |
 |---|---|---|
 | fal latency >2s breaks per-submission pacing | HIGH | FLUX schnell 4 steps, fixed seed, loading anim masks. Pre-warm on lobby mount. |
-| Round-target gen latency stalls round start | HIGH | Now: 1× FLUX (~1s) + 1× Replicate CLIP target embed (~0.9s) = ~2s. Below 5s p50 budget. `generating` phase still masks the wait. |
-| Replicate cold start on first round | MED | New risk from CLIP pivot. Replicate community models can spin up cold (5–30s). Mitigation: fire a tiny pre-warm clip-features call when lobby mounts; keep a hot path by hitting CLIP at least once per minute during lobby idle. |
-| CLIP threshold mis-tuned | MED | Calibrated to 0.88 against image-image baseline (see Stage 1). Recheck per category — different visual styles shift the band. Show live sim score so players self-tune. |
+| Round-target gen latency stalls round start | MED | Now: 1× FLUX (~1s) only. `generating` phase still masks the wait. Lower than pre-pivot since CLIP step removed. |
+| Voting feels random with low player counts | MED | New risk from vote-only scoring. With 3 players each round caps at 2 votes × 10 = 20 pts; one excellent vs one bad swings outcomes hard. Mitigations: encourage 4+ players in demo; consider normalizing scores by voter count later. |
 | Category produces unrecognizable images | MED | Person C tests each category 5× during Hr 0–4. Mark `demoSafe: true` only after passing. Demo defaults to safe categories. |
 | Demo Wi-Fi flakes | HIGH | Hotspot backup. Pre-recorded video fallback. |
 | Pusher free tier cap | MED | Cap rooms to 8 players (`settings.maxPlayers`). One demo room only. |

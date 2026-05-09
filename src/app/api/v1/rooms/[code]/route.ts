@@ -8,7 +8,6 @@ import type { Attempt, RoomState, Vote } from "@/lib/types"
 import { getRoom, joinRoom, leaveRoom, saveRoom, setPlayerReady } from "@/lib/rooms"
 import { getCategoryPrompt } from "@/lib/targets"
 import { falGenerate } from "@/lib/fal"
-import { clipEmbed } from "@/lib/replicate"
 import { awardRoundScores, selectFinalAttempts } from "@/lib/scoring"
 
 // Phase durations (ms). `playing` uses room.settings.timer (host-configurable).
@@ -223,8 +222,8 @@ export async function POST(
     }
 
     if (room.status === "voting") {
-      // voting → reveal: dedup attempts to one final per player (pick → fallback),
-      // award CLIP + vote points, reveal target prompt.
+      // voting → reveal: dedup attempts to one final per player (pick → fallback to last-submitted),
+      // award vote points, reveal target prompt.
       const attempts =
         ((await redis.get(
           `room:${code}:attempts:${room.currentRound}`
@@ -313,13 +312,13 @@ export async function POST(
   }
 }
 
-// Run the keystone composition: getCategoryPrompt → falGenerate → clipEmbed.
+// Run the keystone composition: getCategoryPrompt → falGenerate.
 // Used by the `start` action (lobby → round 1) and the `advance` action when
 // transitioning out of `reveal` to round N+1.
 //
 // Side-effects: increments room.currentRound, flips status through
 // generating → playing, stamps phaseEndsAt for the playing phase, broadcasts
-// `round-generating` and (on success) `round-starting`. On FLUX/CLIP failure,
+// `round-generating` and (on success) `round-starting`. On FLUX failure,
 // reverts to lobby and broadcasts `round-failed`.
 async function generateRoundTarget(
   room: RoomState,
@@ -330,7 +329,6 @@ async function generateRoundTarget(
   room.currentRound += 1
   room.targetImageUrl = null
   room.targetPrompt = null
-  room.targetEmbedding = null
   room.seed = null
   room.phaseEndsAt = null
   room.picks = {}
@@ -343,15 +341,13 @@ async function generateRoundTarget(
     round: room.currentRound,
   })
 
-  // Phase 2: FLUX target → CLIP embedding cached on RoomState.
+  // Phase 2: FLUX target.
   try {
     const { prompt, seed } = getCategoryPrompt(room.settings.category)
     const { imageUrl } = await falGenerate(prompt, seed)
-    const targetEmbedding = await clipEmbed(imageUrl)
 
     room.targetImageUrl = imageUrl
     room.targetPrompt = prompt // server-only until reveal
-    room.targetEmbedding = targetEmbedding
     room.seed = seed
     room.status = "playing"
     room.phaseEndsAt = Date.now() + room.settings.timer * 1000
@@ -367,11 +363,10 @@ async function generateRoundTarget(
 
     return NextResponse.json({ room })
   } catch (err) {
-    // Revert to lobby on FLUX/CLIP failure so the host can retry.
+    // Revert to lobby on FLUX failure so the host can retry.
     room.status = "lobby"
     room.targetImageUrl = null
     room.targetPrompt = null
-    room.targetEmbedding = null
     room.seed = null
     room.phaseEndsAt = null
     await saveRoom(room)
