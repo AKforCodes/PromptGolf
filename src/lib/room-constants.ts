@@ -29,9 +29,9 @@ export interface DifficultyMeta {
 export const CATEGORIES: CategoryMeta[] = [
   { id: "animals", label: "Animals", emoji: "🦊", color: "#bbf7d0" },
   { id: "landmarks", label: "Landmarks", emoji: "🗽", color: "#38BDF8" },
-  { id: "food", label: "Food", emoji: "🍕", color: "#F472B6" },
-  { id: "celebrity", label: "Celebrities", emoji: "🌟", color: "#FACC15" },
-  { id: "logos", label: "Logos", emoji: "🏷️", color: "#fda4af" },
+  { id: "foods", label: "Foods", emoji: "🍕", color: "#F472B6" },
+  { id: "nature", label: "Nature", emoji: "🌲", color: "#bae6fd" },
+  { id: "characters", label: "Characters", emoji: "🦸", color: "#FACC15" },
 ];
 
 export const DIFFICULTIES: DifficultyMeta[] = [
