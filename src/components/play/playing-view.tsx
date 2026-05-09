@@ -30,10 +30,15 @@ export function PlayingView({
   onClearError,
   onLeave,
 }: PlayingViewProps) {
-  const { settings, currentRound, players, targetImageUrl } = roomState;
-  const isHost = roomState.hostId === userId;
-  const isSpectator =
-    players.find((p) => p.userId === userId)?.role === "spectator";
+  const { settings, currentRound, players, targetImageUrl, hostId } = roomState;
+
+  // Identity gates. Game has started — derive once and reuse.
+  const isHost = userId === hostId;
+  const nonHostPlayers = players.filter((p) => p.userId !== hostId);
+  const meAsNonHost = nonHostPlayers.find((p) => p.userId === userId);
+  // A non-host with role !== "spectator" is a prompter (they submit prompts).
+  const isPrompter = !isHost && meAsNonHost?.role === "prompter";
+  const isSpectator = !isHost && meAsNonHost?.role === "spectator";
 
   const [localPhase, setLocalPhase] = useState<LocalPhase>("memorize");
   const [secondsLeft, setSecondsLeft] = useState<number>(settings.memorizeTime);
@@ -106,9 +111,10 @@ export function PlayingView({
     if (ok) setPrompt("");
   };
 
+  // Players strip shows non-host prompters only — they're the ones submitting.
   const submittedPlayers = useMemo<Player[]>(
-    () => players.filter((p) => p.role === "prompter"),
-    [players]
+    () => nonHostPlayers.filter((p) => p.role === "prompter"),
+    [nonHostPlayers]
   );
 
   const totalForBar =
