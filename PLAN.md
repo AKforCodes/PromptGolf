@@ -32,17 +32,29 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 
 ---
 
-## Stage 1 — Threshold + bot (Hr 2–3) — A ⚠️ CRITICAL
+## Stage 1 — Threshold + bot (Hr 2–3) — A ⚠️ CRITICAL → ✅ DONE 2026-05-09
 
-- `/lib/scoring.ts` — fal CLIP scoring wrapper, threshold gate, tiebreak fn (`chars → tokens (chars/4) → similarity → submittedAt`)
-- Calibrate threshold against 5 live-generated sample targets (one per category, run via Person C's prompt fragments):
-  - Submit obvious-correct prompt → expect ≥0.85
-  - Submit obvious-wrong prompt → expect ≤0.5
-  - Submit fuzzy-close prompt → expect 0.7–0.8
-- Land threshold in 0.72–0.82 range, default 0.78
-- `/lib/devBot.ts` — fake player, joins room via API, submits random short prompts. Toggle via `?bot=3`
-- **Gate:** if fal CLIP latency >1s or threshold uncalibratable → escalate immediately
-- **Also gate here:** end-to-end FLUX-gen latency for round target. If >5s p50, the `generating` phase will feel broken — falls under same escalation.
+**Status:** scoring path validated via `src/app/api/smoke/replicate-clip/route.ts`. fal CLIP path was investigated and rejected (only fal endpoint exposing image embeddings is SAM-3, which is a 1.3M-dim segmentation feature map — doesn't discriminate semantic similarity). Pivoted to **Replicate `andreasjansson/clip-features`** (version-pinned), which returns the standard openai/clip-vit-large-patch14 768-dim embedding. Calibration result on 4-image test (red apple target, identical regen, fuzzy "red apple on table", wrong "yellow banana on grass"):
+
+| Pair | Cosine | Notes |
+|---|---|---|
+| target ↔ identical regen | **1.000** | confirms FLUX is deterministic with fixed seed |
+| target ↔ fuzzy (golfer-style short prompt) | **0.978** | qualifying ceiling |
+| target ↔ wrong (different concept) | **0.849** | unrelated baseline |
+
+**Important:** image-image CLIP cosine has a high floor (~0.85 even for unrelated natural photos — the embedding space isn't packed in [0, 1]). Separation is what matters, not absolute. We have ≈+0.13 separation between fuzzy and wrong.
+
+- **Threshold default: 0.88** (between wrong and fuzzy). Recheck per category — different visual styles may shift the band.
+- Latency: FLUX gen ~1s, CLIP embed ~0.9s/image. Round-start budget: 1× FLUX (~1s) + 1× CLIP target embed (~0.9s) ≈ 2s, masked by `generating` phase.
+- Per-submission budget: 1× FLUX (~1s) + 1× CLIP candidate embed (~0.9s) + cosine in JS (free) ≈ 2s.
+
+To do here:
+- `/lib/replicate.ts` — `clipEmbed(imageUrl): Promise<number[]>` wrapper around the version-pinned `andreasjansson/clip-features:75b33f25...` model. Take the result of `replicate.run()`, return `output[0].embedding`.
+- `/lib/scoring.ts` — `cosine(a, b)` (pure JS, ~10 lines), `qualifies(sim, threshold)`, `tiebreak(attempts)` for `chars → tokens (chars/4) → similarity → submittedAt`.
+- `/lib/devBot.ts` — fake player, joins room via API, submits random short prompts. Toggle via `?bot=3`.
+- Delete `src/app/api/smoke/whoami/route.ts` and `src/app/api/smoke/fal/route.ts` (SAM-3 path) once `lib/replicate.ts` lands. Keep `smoke/replicate-clip` until Stage 4 is wired up.
+
+**Originally-planned escalation gate:** if fal CLIP latency >1s or threshold uncalibratable → escalate. Triggered. Resolved by pivoting to Replicate.
 
 ---
 
@@ -82,22 +94,24 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 **A — server**
 - `/api/round/start` POST `{roomCode}` (host-only):
   1. Validate caller is host via cookie playerId
-  2. Pick category from `room.config.categories` (round-robin or random)
-  3. Look up category's fixed `prompt` in `data/categories.json` via `/lib/targets.ts`
+  2. Pick category from `room.settings.category` (or rotate through if multi-category)
+  3. Look up category's prompt in `data/categories.json` via `/lib/targets.ts`
   4. Pick fresh `seed` from category's `seedRange`
   5. fal FLUX schnell with category prompt + seed → `targetImageUrl`
-  6. Write `RoundState` into `room.round`, flip status `lobby|reveal → generating → countdown`
-  7. Broadcast `round-starting` over Pusher with `{targetImageUrl, category}` — never `targetPrompt`. Category id is safe to send: it's a genre hint, not the answer key. Knowing the prompt verbatim doesn't help players golf — the char-count tiebreak punishes long prompts even if they hit threshold.
-  8. Server timer drives `countdown(3) → playing(60) → reveal(15)`
+  6. **Embed target once via `clipEmbed(targetImageUrl)` → 768d `targetEmbedding`. Cache on `RoomState.targetEmbedding`.** This is the keystone of the per-submission cost model: target is embedded once, reused for every player's cosine.
+  7. Write round state into `RoomState`, flip status `lobby|reveal → generating → countdown`
+  8. Broadcast `round-starting` over Pusher with `{targetImageUrl, category}` — never `targetPrompt`, never `targetEmbedding`. Category id is safe to send: it's a genre hint, not the answer key. Knowing the prompt verbatim doesn't help players golf — the char-count tiebreak punishes long prompts even if they hit threshold.
+  9. Server timer drives `countdown(3) → playing(60) → reveal(15)`
 - `/api/generate` POST `{roomCode, prompt}` (player submission):
-   1. Validate cookie playerId is in room, status === `playing`, prompt len ≤ `room.settings.promptMaxLength`, debounce 3s
-  2. Fetch `room.round` → reuse the round's `seed` so player's gen and target gen share latent space
-  3. fal FLUX schnell with player's prompt + seed → image url
-  4. fal CLIP target_image vs generated → similarity
-  5. Compute `{chars, tokens: Math.ceil(prompt.length / 4), qualified, rank}`
-  6. Append `Attempt` to `room:{CODE}:attempts:{round}` in Redis (read → push → write)
-  7. Broadcast via Pusher `attempt-submitted`
-  8. Return result to caller
+  1. Validate cookie playerId is in room, status === `playing`, prompt len ≤ `room.settings.promptMaxLength`, debounce 3s
+  2. Fetch `RoomState` → reuse the round's `seed` so player's gen and target gen share latent space
+  3. fal FLUX schnell with player's prompt + seed → candidate image url
+  4. `clipEmbed(candidateImageUrl)` → 768d candidate embedding
+  5. `similarity = cosine(targetEmbedding, candidateEmbedding)` — pure JS, no extra API call
+  6. Compute `{chars, tokens: Math.ceil(prompt.length / 4), qualified: similarity >= room.settings.threshold (default 0.88), rank}`
+  7. Append `Attempt` to `room:{CODE}:attempts:{round}` in Redis (read → push → write)
+  8. Broadcast via Pusher `attempt-submitted`
+  9. Return result to caller
 - Round state machine in Redis: `lobby → generating → countdown(3) → playing(60) → reveal(15) → (next round | ended)`
 - Server-authoritative timer, broadcast tick events
 - Reveal payload includes `targetPrompt` (the only time it leaves the server)
@@ -187,8 +201,9 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 | Risk | Severity | Mitigation |
 |---|---|---|
 | fal latency >2s breaks per-submission pacing | HIGH | FLUX schnell 4 steps, fixed seed, loading anim masks. Pre-warm on lobby mount. |
-| Round-target gen latency stalls round start | HIGH | New risk from on-demand gen. Mitigations: (1) `generating` phase explicitly visible in UI, (2) start FLUX call when host clicks Start *before* countdown, (3) parallelize the pre-warm with state setup. Budget: 5s p50. If miss, escalate. |
-| CLIP threshold mis-tuned | MED | Stage 1 calibration on 5 live-gen targets across categories. Show live sim score so players self-tune. |
+| Round-target gen latency stalls round start | HIGH | Now: 1× FLUX (~1s) + 1× Replicate CLIP target embed (~0.9s) = ~2s. Below 5s p50 budget. `generating` phase still masks the wait. |
+| Replicate cold start on first round | MED | New risk from CLIP pivot. Replicate community models can spin up cold (5–30s). Mitigation: fire a tiny pre-warm clip-features call when lobby mounts; keep a hot path by hitting CLIP at least once per minute during lobby idle. |
+| CLIP threshold mis-tuned | MED | Calibrated to 0.88 against image-image baseline (see Stage 1). Recheck per category — different visual styles shift the band. Show live sim score so players self-tune. |
 | Category produces unrecognizable images | MED | Person C tests each category 5× during Hr 0–4. Mark `demoSafe: true` only after passing. Demo defaults to safe categories. |
 | Demo Wi-Fi flakes | HIGH | Hotspot backup. Pre-recorded video fallback. |
 | Pusher free tier cap | MED | Cap rooms to 8 players (`settings.maxPlayers`). One demo room only. |
