@@ -95,7 +95,7 @@ public/
 
 ## Data Model
 
-Defined in `lib/types.ts`. Stored in Redis as JSON strings, all keys 1h TTL.
+Defined in `lib/types.ts`. Stored in Redis via the Upstash SDK (auto-serializes objects), 1h TTL on every key.
 
 ```ts
 // src/lib/types.ts — source of truth
