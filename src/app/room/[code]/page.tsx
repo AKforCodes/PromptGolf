@@ -24,6 +24,7 @@ import { JoinPrompt } from "@/components/lobby/join-prompt";
 import { PlayersCard } from "@/components/lobby/players-card";
 import { RoundSummaryCard } from "@/components/lobby/round-summary-card";
 import { ShareCard } from "@/components/lobby/share-card";
+import { PlayingView } from "@/components/play/playing-view";
 
 interface RoomPageProps {
   params: Promise<{ code: string }>;
@@ -304,6 +305,17 @@ function RoomLobby({ code }: { code: string }) {
       <main className="flex flex-1 items-center justify-center">
         <div className="font-heading text-2xl">Loading room…</div>
       </main>
+    );
+  }
+
+  if (roomState.status === "playing" || roomState.status === "countdown") {
+    return (
+      <PlayingView
+        code={code}
+        roomState={roomState}
+        userId={userId}
+        onLeave={handleLeave}
+      />
     );
   }
 
