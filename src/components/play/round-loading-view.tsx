@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import type { RoomState } from "@/lib/types";
 import { Card } from "@/components/jklm/card";
 import { Button } from "@/components/jklm/button";
@@ -8,9 +9,26 @@ import { findCategory } from "@/lib/room-constants";
 interface RoundLoadingViewProps {
   roomState: RoomState;
   onLeave: () => void;
+  onRefetch: () => Promise<RoomState | null>;
 }
 
-export function RoundLoadingView({ roomState, onLeave }: RoundLoadingViewProps) {
+export function RoundLoadingView({
+  roomState,
+  onLeave,
+  onRefetch,
+}: RoundLoadingViewProps) {
+  useEffect(() => {
+    const interval = setInterval(() => {
+      void onRefetch();
+    }, 3000);
+    const timeout = setTimeout(() => {
+      clearInterval(interval);
+    }, 30000);
+    return () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+    };
+  }, [onRefetch]);
   const { settings, currentRound } = roomState;
   const category = findCategory(settings.category);
 

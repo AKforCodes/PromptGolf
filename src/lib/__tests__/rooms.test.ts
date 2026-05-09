@@ -374,3 +374,76 @@ describe("setPlayerReady", () => {
     expect(b.player?.ready).toBe(true)
   })
 })
+
+describe("nonHostPrompters / allReady with role filtering", () => {
+  const tightSettings: RoomSettings = { ...mockSettings, maxPlayers: 2 }
+
+  const prompter: Player = {
+    userId: "prompter-1",
+    name: "P1",
+    avatarSeed: "s1",
+    role: "prompter",
+    ready: true,
+    joinedAt: 2000,
+    connected: true,
+    lastSeenAt: 2000,
+  }
+
+  const spectator: Player = {
+    userId: "spec-1",
+    name: "S1",
+    avatarSeed: "s2",
+    role: "spectator",
+    ready: false,
+    joinedAt: 3000,
+    connected: true,
+    lastSeenAt: 3000,
+  }
+
+  const max1Settings: RoomSettings = { ...mockSettings, maxPlayers: 1 }
+
+  function getNonHostPrompters(
+    players: Player[],
+    hostId: string,
+  ): Player[] {
+    return players.filter(
+      (p) => p.userId !== hostId && p.role === "prompter",
+    )
+  }
+
+  function getAllReady(players: Player[], hostId: string): boolean {
+    const prompters = players.filter(
+      (p) => p.userId !== hostId && p.role === "prompter",
+    )
+    return prompters.length > 0 && prompters.every((p) => p.ready)
+  }
+
+  it("nonHostPrompters excludes spectators", async () => {
+    const { createRoom, joinRoom } = await import("../rooms")
+    const room = await createRoom(tightSettings, host)
+    const { room: withPrompter } = await joinRoom(room, { ...prompter })
+    const { room: full } = await joinRoom(withPrompter, { ...spectator })
+
+    const nhp = getNonHostPrompters(full.players, full.hostId)
+    expect(nhp).toHaveLength(1)
+    expect(nhp[0].userId).toBe("prompter-1")
+  })
+
+  it("allReady excludes spectators — ready prompter + unready spec = ready", async () => {
+    const { createRoom, joinRoom, setPlayerReady } = await import("../rooms")
+    const room = await createRoom(tightSettings, host)
+    const { room: withPrompter } = await joinRoom(room, { ...prompter })
+    const { room: full } = await joinRoom(withPrompter, { ...spectator })
+    const { room: after } = await setPlayerReady(full, "prompter-1", true)
+
+    expect(getAllReady(after.players, after.hostId)).toBe(true)
+  })
+
+  it("allReady is false when no prompters present (only spectators)", async () => {
+    const { createRoom, joinRoom } = await import("../rooms")
+    const room = await createRoom(max1Settings, host)
+    const { room: full } = await joinRoom(room, { ...spectator })
+
+    expect(getAllReady(full.players, full.hostId)).toBe(false)
+  })
+})

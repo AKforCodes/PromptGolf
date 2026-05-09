@@ -164,14 +164,21 @@ export async function POST(
   }
 
   if (action === "ready" || action === "unready") {
-    const { room: updatedRoom, player } = await setPlayerReady(
+    const player = room.players.find((p) => p.userId === userId);
+    if (!player) {
+      return NextResponse.json({ error: "not in room" }, { status: 403 });
+    }
+    if (player.role !== "prompter") {
+      return NextResponse.json(
+        { error: "only prompters can ready" },
+        { status: 403 },
+      );
+    }
+    const { room: updatedRoom } = await setPlayerReady(
       room,
       userId,
       action === "ready",
     );
-    if (!player) {
-      return NextResponse.json({ error: "not in room" }, { status: 403 });
-    }
 
     await pusher.trigger(`presence-room-${code}`, "player-ready", {
       userId,
@@ -192,16 +199,18 @@ export async function POST(
       );
     }
 
-    const nonHostPlayers = room.players.filter((p) => p.userId !== room.hostId);
-    if (nonHostPlayers.length < 1) {
+    const nonHostPrompters = room.players.filter(
+      (p) => p.userId !== room.hostId && p.role === "prompter",
+    );
+    if (nonHostPrompters.length < 1) {
       return NextResponse.json(
-        { error: "need at least 1 other player" },
+        { error: "need at least 1 prompter" },
         { status: 400 },
       );
     }
-    if (!nonHostPlayers.every((p) => p.ready)) {
+    if (!nonHostPrompters.every((p) => p.ready)) {
       return NextResponse.json(
-        { error: "not all players ready" },
+        { error: "not all prompters ready" },
         { status: 400 },
       );
     }
