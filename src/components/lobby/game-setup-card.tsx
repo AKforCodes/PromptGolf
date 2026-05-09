@@ -4,9 +4,12 @@ import type { RoomSettings } from "@/lib/types";
 import {
   CATEGORIES,
   DIFFICULTIES,
+  MAX_MEMORIZE,
   MAX_PLAYERS,
   MAX_ROUNDS,
   MAX_TIMER,
+  MEMORIZE_STEP,
+  MIN_MEMORIZE,
   MIN_PLAYERS,
   MIN_ROUNDS,
   MIN_TIMER,
@@ -118,6 +121,26 @@ export function GameSetupCard({ settings, onChange }: GameSetupCardProps) {
             ariaLabel="round timer in seconds"
             fillColor="#FACC15"
             onChange={(n) => onChange("timer", n)}
+          />
+        </fieldset>
+
+        <fieldset>
+          <div className="mb-2 flex items-baseline justify-between">
+            <legend className="font-heading text-sm font-semibold uppercase tracking-wide text-ink/60">
+              Memorize time
+            </legend>
+            <span className="font-heading text-xs text-ink/50">
+              {MIN_MEMORIZE}–{MAX_MEMORIZE}s
+            </span>
+          </div>
+          <Stepper
+            value={settings.memorizeTime}
+            min={MIN_MEMORIZE}
+            max={MAX_MEMORIZE}
+            step={MEMORIZE_STEP}
+            ariaLabel="memorize time in seconds"
+            fillColor="#38BDF8"
+            onChange={(n) => onChange("memorizeTime", n)}
           />
         </fieldset>
 

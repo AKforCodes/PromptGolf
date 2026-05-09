@@ -5,6 +5,8 @@ export const RoomSettings = z.object({
   rounds: z.number().int().min(1).max(5).default(3),
   maxPlayers: z.number().int().min(1).max(8).default(8),
   timer: z.number().int().min(30).max(120).default(60),
+  // How long the target image is shown before it disappears and prompting begins.
+  memorizeTime: z.number().int().min(5).max(30).default(10),
   promptMaxLength: z.number().int().min(50).max(200).default(200),
   // Each player gets up to N FLUX submissions per round. Capped at 5 to bound cost.
   attemptsPerRound: z.number().int().min(1).max(5).default(3),

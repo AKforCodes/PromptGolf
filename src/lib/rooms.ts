@@ -91,3 +91,18 @@ export async function leaveRoom(
 export async function isUserInRoom(room: RoomState, userId: string): Promise<boolean> {
   return room.players.some((p) => p.userId === userId)
 }
+
+export async function setPlayerReady(
+  room: RoomState,
+  userId: string,
+  ready: boolean
+): Promise<{ room: RoomState; player: Player | null }> {
+  const player = room.players.find((p) => p.userId === userId)
+  if (!player) {
+    return { room, player: null }
+  }
+
+  player.ready = ready
+  await saveRoom(room)
+  return { room, player }
+}
