@@ -158,18 +158,18 @@ export async function POST(
     if (room.status !== "lobby") {
       return NextResponse.json({ error: "game already started" }, { status: 409 })
     }
-    if (room.players.length < 2) {
-      return NextResponse.json({ error: "need at least 2 players" }, { status: 400 })
+
+    const nonHostPlayers = room.players.filter((p) => p.userId !== room.hostId)
+    if (nonHostPlayers.length < 1) {
+      return NextResponse.json({ error: "need at least 1 other player" }, { status: 400 })
     }
-    if (!room.players.every((p) => p.ready)) {
+    if (!nonHostPlayers.every((p) => p.ready)) {
       return NextResponse.json({ error: "not all players ready" }, { status: 400 })
     }
 
     room.status = "playing"
     room.currentRound = 1
-    for (const p of room.players) {
-      p.ready = false
-    }
+    room.players.forEach((p) => { p.ready = false })
     await saveRoom(room)
 
     await pusher.trigger(`presence-room-${code}`, "round-starting", {

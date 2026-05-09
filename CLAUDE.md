@@ -65,7 +65,7 @@ src/
     room/[code]/spectate/page.tsx  # projector view, read-only
     api/v1/
       rooms/route.ts               # POST create
-      rooms/[code]/route.ts        # GET state, POST join/leave
+      rooms/[code]/route.ts        # GET state, POST join/leave/ready/unready/start
       user/seed/route.ts           # GET mint user_id cookie
       pusher/auth/route.ts         # POST presence channel auth
       generate/route.ts            # POST prompt → image_url + CLIP score
@@ -224,8 +224,10 @@ This means the lobby roster updates itself — no custom join/leave events neede
 1. Visitor lands on `/` → client calls `/api/v1/user/seed` → server mints `userId` cookie if missing → name input + DiceBear avatar editable → `[CREATE LOBBY]` or `[JOIN: ____]`
 2. Create lobby → host picks settings (max players 1–8, rounds 1–5, timer, category, prompt max length) → `POST /api/v1/rooms` → 4-letter code → `/room/ABCD`
 3. Players join via code or shared link → `POST /api/v1/rooms/ABCD { action: "join" }` → first N = prompter, rest = spectator → lobby with avatars, names, ready toggle. Host has Start button.
-4. Host clicks Start → status flips to `generating` → server picks a category from the room's pool, looks up that category's fixed FLUX prompt in `data/categories.json`, picks a fresh seed from the category's `seedRange`, calls FLUX schnell → embeds `targetImageUrl` once via Replicate `andreasjansson/clip-features` and caches the 768d vector in `RoomState.targetEmbedding` → stores `targetPrompt` server-side → broadcasts `{targetImageUrl, category}` + countdown via Pusher. Category id is fine to show — golf rewards short prompts, so knowing the genre is a hint, not an exploit. Only `targetPrompt` is server-only.
-5. `countdown(3)` → `playing(60)`. Players submit prompts → server calls fal FLUX with prompt → embeds candidate via Replicate clip-features → cosine similarity against cached `targetEmbedding` (pure JS, no extra API call) → broadcast attempt via Pusher → leaderboard updates live. Caching halves CLIP cost: 1 + N embeddings per round instead of 2N.
+4. Non-host players click "Ready Up" → `POST { action: "ready" }` → server sets `player.ready = true` in Redis → Pusher fires `player-ready` → all clients refetch room state. `{ action: "unready" }` toggles back. Host has no ready button — only non-host players are counted.
+5. When all non-host players are ready, host's "Start Round" button enables.
+6. Host clicks Start → `POST { action: "start" }` → server validates (host, ≥1 non-host player, all non-host players ready) → sets `room.status = "playing"`, `room.currentRound = 1`, resets all ready flags → Pusher fires `round-starting` → all clients transition to game view.
+7. `countdown(3)` → `playing(60)`. Players submit prompts → server calls fal FLUX with prompt → embeds candidate via Replicate clip-features → cosine similarity against cached `targetEmbedding` (pure JS, no extra API call) → broadcast attempt via Pusher → leaderboard updates live. Caching halves CLIP cost: 1 + N embeddings per round instead of 2N.
 6. Timer ends → `reveal(15)`: target on left, all attempts in stroke order, prompts (including target prompt) revealed with stagger animation, winner fanfare
 7. Next round (3 default) → final reveal → share card → return to lobby
 
