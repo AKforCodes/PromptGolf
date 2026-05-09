@@ -11,6 +11,7 @@ import {
   joinRoom,
   leaveRoom,
   seedUser,
+  startRoom,
   updateRoomSettings,
 } from "@/lib/api";
 import { getPusher } from "@/lib/pusher-client";
@@ -183,7 +184,11 @@ function RoomLobby({ code }: { code: string }) {
 
   const settings: RoomSettings = localSettings ?? FALLBACK_SETTINGS;
   const players: Player[] = roomState?.players ?? [];
-  const allReady = players.length > 0 && players.every((p) => p.ready);
+  const nonHostPlayers = roomState
+    ? players.filter((p) => p.userId !== roomState.hostId)
+    : [];
+  const allReady =
+    nonHostPlayers.length > 0 && nonHostPlayers.every((p) => p.ready);
   const canStart = isHost && allReady && players.length >= 2;
 
   const update = <K extends keyof RoomSettings>(
@@ -220,9 +225,14 @@ function RoomLobby({ code }: { code: string }) {
     setPhase("ready");
   };
 
-  const handleStart = () => {
+  const handleStart = async () => {
     if (!canStart) return;
-    console.log("Start round (mock — start endpoint pending)", { code, settings });
+    const [err] = await tryCatch(startRoom(code));
+    if (err) {
+      console.error("Start failed:", err);
+      return;
+    }
+    void refetchRoom();
   };
 
   const handleLeave = async () => {
