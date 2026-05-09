@@ -13,6 +13,8 @@ interface PlayingViewProps {
   onLeave: () => void;
 }
 
+type LocalPhase = "memorize" | "prompting";
+
 export function PlayingView({
   code,
   roomState,
@@ -24,39 +26,61 @@ export function PlayingView({
   const isSpectator =
     players.find((p) => p.userId === userId)?.role === "spectator";
 
+  const [localPhase, setLocalPhase] = useState<LocalPhase>("memorize");
+  const [secondsLeft, setSecondsLeft] = useState<number>(settings.memorizeTime);
   const [prompt, setPrompt] = useState<string>("");
   const [submitted, setSubmitted] = useState<boolean>(false);
-  const [secondsLeft, setSecondsLeft] = useState<number>(settings.timer);
-  const startedAtRef = useRef<number>(Date.now());
+  const phaseStartedAtRef = useRef<number>(Date.now());
 
-  // Reset round-local state whenever the round number changes.
+  // Reset everything whenever the round number changes.
   useEffect(() => {
+    setLocalPhase("memorize");
+    setSecondsLeft(settings.memorizeTime);
     setPrompt("");
     setSubmitted(false);
-    setSecondsLeft(settings.timer);
-    startedAtRef.current = Date.now();
-  }, [currentRound, settings.timer]);
+    phaseStartedAtRef.current = Date.now();
+  }, [currentRound]);
 
-  // Local countdown. Server will become source of truth once it broadcasts
-  // a round-start timestamp; until then, count from mount.
+  // Reset the phase clock whenever localPhase changes (memorize → prompting).
   useEffect(() => {
+    phaseStartedAtRef.current = Date.now();
+    setSecondsLeft(
+      localPhase === "memorize" ? settings.memorizeTime : settings.timer
+    );
+  }, [localPhase, settings.timer]);
+
+  // Tick the countdown. When memorize hits zero, advance to prompting.
+  useEffect(() => {
+    const total =
+      localPhase === "memorize" ? settings.memorizeTime : settings.timer;
+
     const interval = setInterval(() => {
       const elapsed = Math.floor(
-        (Date.now() - startedAtRef.current) / 1000
+        (Date.now() - phaseStartedAtRef.current) / 1000
       );
-      const remaining = Math.max(0, settings.timer - elapsed);
+      const remaining = Math.max(0, total - elapsed);
       setSecondsLeft(remaining);
+
+      if (remaining === 0 && localPhase === "memorize") {
+        setLocalPhase("prompting");
+      }
     }, 250);
+
     return () => clearInterval(interval);
-  }, [settings.timer]);
+  }, [localPhase, settings.timer]);
 
   const category = findCategory(settings.category);
   const charCount = prompt.length;
   const charPct = Math.min(100, (charCount / settings.promptMaxLength) * 100);
   const overCap = charCount > settings.promptMaxLength;
-  const timeOut = secondsLeft === 0;
+  const timeOut = localPhase === "prompting" && secondsLeft === 0;
   const canSubmit =
-    !submitted && !timeOut && !overCap && prompt.trim().length > 0 && !isSpectator;
+    localPhase === "prompting" &&
+    !submitted &&
+    !timeOut &&
+    !overCap &&
+    prompt.trim().length > 0 &&
+    !isSpectator;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,6 +94,11 @@ export function PlayingView({
     () => players.filter((p) => p.role === "prompter"),
     [players]
   );
+
+  const totalForBar =
+    localPhase === "memorize" ? settings.memorizeTime : settings.timer;
+  const barPct = (secondsLeft / totalForBar) * 100;
+  const barColor = localPhase === "memorize" ? "bg-sky" : "bg-golf";
 
   return (
     <main className="flex flex-1 flex-col px-4 py-6">
@@ -94,15 +123,19 @@ export function PlayingView({
           </div>
         </div>
 
-        {/* Timer */}
+        {/* Phase pill + timer */}
         <div className="mb-4 rounded-3xl border-[3px] border-ink bg-white p-3 shadow-chunky-sm">
           <div className="flex items-center justify-between gap-3">
-            <span className="font-heading text-sm font-semibold uppercase tracking-wide text-ink/60">
-              time left
+            <span
+              className={`rounded-full border-[3px] border-ink px-3 py-0.5 font-heading text-xs font-bold uppercase tracking-wide ${
+                localPhase === "memorize" ? "bg-sky" : "bg-sun"
+              }`}
+            >
+              {localPhase === "memorize" ? "Memorize" : "Prompt"}
             </span>
             <span
               className={`font-heading text-3xl font-bold tabular-nums ${
-                secondsLeft <= 10 && secondsLeft > 0
+                secondsLeft <= 5 && secondsLeft > 0
                   ? "text-pink"
                   : timeOut
                   ? "text-ink/40"
@@ -114,21 +147,24 @@ export function PlayingView({
           </div>
           <div className="mt-2 h-2 overflow-hidden rounded-full border-[3px] border-ink bg-cream">
             <div
-              className="h-full bg-golf transition-all duration-150"
-              style={{
-                width: `${(secondsLeft / settings.timer) * 100}%`,
-              }}
+              className={`h-full transition-all duration-150 ${barColor}`}
+              style={{ width: `${barPct}%` }}
             />
           </div>
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          {/* Target image */}
+        {/* Phase body */}
+        {localPhase === "memorize" ? (
           <Card className="flex flex-col">
-            <h2 className="mb-3 font-heading text-lg font-bold uppercase tracking-wide">
-              Target
-            </h2>
-            <div className="relative flex aspect-square w-full items-center justify-center overflow-hidden rounded-2xl border-[3px] border-ink bg-cream">
+            <div className="mb-3 text-center">
+              <h2 className="font-heading text-xl font-bold uppercase tracking-wide">
+                Memorize the image
+              </h2>
+              <p className="mt-1 font-heading text-xs text-ink/50">
+                it will disappear when the timer runs out
+              </p>
+            </div>
+            <div className="relative mx-auto flex aspect-square w-full max-w-xl items-center justify-center overflow-hidden rounded-2xl border-[3px] border-ink bg-cream">
               {targetId ? (
                 /* eslint-disable-next-line @next/next/no-img-element */
                 <img
@@ -148,20 +184,21 @@ export function PlayingView({
                 </div>
               )}
             </div>
-            <p className="mt-3 text-center font-heading text-xs text-ink/50">
-              recreate this with the shortest prompt
-            </p>
           </Card>
-
-          {/* Prompt input */}
+        ) : (
           <Card>
             <form onSubmit={handleSubmit} className="flex h-full flex-col">
-              <h2 className="mb-3 font-heading text-lg font-bold uppercase tracking-wide">
-                Your Prompt
-              </h2>
+              <div className="mb-3 flex items-baseline justify-between">
+                <h2 className="font-heading text-xl font-bold uppercase tracking-wide">
+                  Your Prompt
+                </h2>
+                <span className="font-heading text-xs uppercase tracking-wide text-ink/50">
+                  recreate from memory
+                </span>
+              </div>
 
               {isSpectator ? (
-                <div className="flex flex-1 items-center justify-center rounded-2xl border-[3px] border-dashed border-ink/40 bg-cream p-6 text-center">
+                <div className="flex flex-1 items-center justify-center rounded-2xl border-[3px] border-dashed border-ink/40 bg-cream p-8 text-center">
                   <div>
                     <div className="text-4xl">👀</div>
                     <p className="mt-2 font-heading text-sm font-semibold uppercase tracking-wide text-ink/60">
@@ -180,11 +217,11 @@ export function PlayingView({
                     disabled={submitted || timeOut}
                     placeholder="e.g. fox in the snow"
                     aria-label="Your prompt"
-                    className="min-h-32 w-full resize-none rounded-2xl border-[3px] border-ink bg-cream px-4 py-3 font-heading text-lg outline-none transition focus:bg-white disabled:opacity-60"
+                    className="min-h-40 w-full resize-none rounded-2xl border-[3px] border-ink bg-cream px-5 py-4 font-heading text-2xl outline-none transition focus:bg-white disabled:opacity-60"
                     autoFocus
                   />
 
-                  <div className="mt-2 flex items-center justify-between font-heading text-xs">
+                  <div className="mt-3 flex items-center justify-between font-heading text-xs">
                     <span className={overCap ? "text-pink" : "text-ink/60"}>
                       {charCount} / {settings.promptMaxLength} chars
                     </span>
@@ -229,16 +266,18 @@ export function PlayingView({
               )}
             </form>
           </Card>
-        </div>
+        )}
 
-        {/* Submission status strip */}
+        {/* Player strip */}
         <Card elevation="sm" className="mt-4 p-4">
           <div className="mb-2 flex items-baseline justify-between">
             <h3 className="font-heading text-sm font-semibold uppercase tracking-wide text-ink/60">
               Players
             </h3>
             <span className="font-heading text-xs text-ink/50">
-              waiting for submissions
+              {localPhase === "memorize"
+                ? "everyone is memorizing"
+                : "waiting for submissions"}
             </span>
           </div>
           <ul className="flex flex-wrap gap-2">
@@ -253,9 +292,8 @@ export function PlayingView({
                     {p.name}
                     {isYou && <span className="ml-1 text-ink/50">(you)</span>}
                   </span>
-                  {/* Submission status will hook into attempts list when /generate broadcasts */}
                   <span className="rounded-full bg-cream px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink/60">
-                    thinking…
+                    {localPhase === "memorize" ? "looking" : "thinking…"}
                   </span>
                 </li>
               );

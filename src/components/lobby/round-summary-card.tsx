@@ -55,6 +55,15 @@ export function RoundSummaryCard({ settings }: RoundSummaryCardProps) {
           </div>
         </div>
 
+        <div className="rounded-2xl border-[3px] border-ink bg-sky p-3 shadow-chunky-sm">
+          <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-ink/60">
+            Memorize
+          </div>
+          <div className="mt-1 font-heading text-2xl font-bold">
+            {settings.memorizeTime}s
+          </div>
+        </div>
+
         <div className="rounded-2xl border-[3px] border-ink bg-pink p-3 shadow-chunky-sm">
           <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-ink/60">
             Prompt cap
@@ -68,7 +77,7 @@ export function RoundSummaryCard({ settings }: RoundSummaryCardProps) {
         </div>
 
         <div
-          className="rounded-2xl border-[3px] border-ink p-3 shadow-chunky-sm"
+          className="col-span-2 rounded-2xl border-[3px] border-ink p-3 shadow-chunky-sm"
           style={{ backgroundColor: difficulty?.color ?? "#FFF8E7" }}
         >
           <div className="font-heading text-[10px] font-bold uppercase tracking-wide text-ink/60">

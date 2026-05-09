@@ -37,6 +37,7 @@ const FALLBACK_SETTINGS: RoomSettings = {
   rounds: 3,
   maxPlayers: 8,
   timer: 60,
+  memorizeTime: 10,
   promptMaxLength: 200,
   attemptsPerRound: 3,
   category: "animals",

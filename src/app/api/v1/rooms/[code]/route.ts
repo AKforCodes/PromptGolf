@@ -5,7 +5,7 @@ import { pusher } from "@/lib/pusher"
 import { redis } from "@/lib/redis"
 import { Player, RoomSettings } from "@/lib/types"
 import type { Attempt, RoomState, Vote } from "@/lib/types"
-import { getRoom, joinRoom, leaveRoom, saveRoom } from "@/lib/rooms"
+import { getRoom, joinRoom, leaveRoom, saveRoom, setPlayerReady } from "@/lib/rooms"
 import { getCategoryPrompt } from "@/lib/targets"
 import { falGenerate } from "@/lib/fal"
 import { clipEmbed } from "@/lib/replicate"
@@ -157,20 +157,21 @@ export async function POST(
   }
 
   if (action === "ready" || action === "unready") {
-    const player = room.players.find((p) => p.userId === userId)
+    const { room: updatedRoom, player } = await setPlayerReady(
+      room,
+      userId,
+      action === "ready"
+    )
     if (!player) {
       return NextResponse.json({ error: "not in room" }, { status: 403 })
     }
-
-    player.ready = action === "ready"
-    await saveRoom(room)
 
     await pusher.trigger(`presence-room-${code}`, "player-ready", {
       userId,
       ready: player.ready,
     })
 
-    return NextResponse.json({ room })
+    return NextResponse.json({ room: updatedRoom })
   }
 
   if (action === "start") {
