@@ -18,7 +18,7 @@ Jackbox-style party game. Players see a target image, race to write the shortest
 | Max players | 1–8, default 8 |
 | Prompt max length | 50–200 chars, default 200 |
 | Timer | 30–120s, default 60 |
-| Categories | animals, landmarks, food, celebrity, logos |
+| Categories | animals, landmarks, foods, nature, characters |
 | Auth | Anon, user_id cookie + DiceBear avatar |
 | Persistence | Upstash Redis only, 1hr TTL, no SQL |
 | Realtime | Pusher (presence + private channels, pub/sub) |
@@ -85,7 +85,7 @@ src/
     spectator/        # BigScreen, JoinQR
     ui/               # shadcn primitives
   data/
-    categories.json   # category id → {label, emoji, prompt, seedRange, demoSafe} — one fixed prompt per category
+    categories.json   # category id → {label, emoji, prompts[], seedRange} — pre-generated prompt pool per category (built offline via Vertex AI Gemini, see src/app/_scripts/generate-targets.ts)
 public/
   sounds/             # ding, buzz, fanfare
 ```
@@ -217,6 +217,7 @@ Round state machine in Redis: `lobby → generating → countdown(3) → playing
 ## Env Vars
 
 ```bash
+# runtime
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
 FAL_KEY=
@@ -225,6 +226,10 @@ PUSHER_SECRET=
 NEXT_PUBLIC_PUSHER_KEY=
 NEXT_PUBLIC_PUSHER_CLUSTER=
 NEXT_PUBLIC_APP_URL=
+
+# build-time only (npm run gen:targets — uses ADC, not bundled into the app)
+GCP_PROJECT_ID=
+GCP_LOCATION=europe-west2
 ```
 
 No `DATABASE_URL`, no Anthropic, no ElevenLabs — all dropped.
