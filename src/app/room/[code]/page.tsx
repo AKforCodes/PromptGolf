@@ -251,11 +251,17 @@ function RoomLobby({ code }: { code: string }) {
 
   const settings: RoomSettings = localSettings ?? FALLBACK_SETTINGS;
   const players: Player[] = roomState?.players ?? [];
-  const nonHostPlayers = roomState
-    ? players.filter((p) => p.userId !== roomState.hostId)
+  const myRole =
+    players.find((p) => p.userId === userId)?.role ?? null;
+  const isSpectator = myRole === "spectator";
+  const nonHostPrompters = roomState
+    ? players.filter(
+        (p) => p.userId !== roomState.hostId && p.role === "prompter",
+      )
     : [];
   const allReady =
-    nonHostPlayers.length > 0 && nonHostPlayers.every((p) => p.ready);
+    nonHostPrompters.length > 0 &&
+    nonHostPrompters.every((p) => p.ready);
   const canStart = isHost && allReady && players.length >= 2;
   const myReady = players.find((p) => p.userId === userId)?.ready ?? false;
 
@@ -377,7 +383,13 @@ function RoomLobby({ code }: { code: string }) {
   }
 
   if (roomState.status === "generating") {
-    return <RoundLoadingView roomState={roomState} onLeave={handleLeave} />;
+    return (
+      <RoundLoadingView
+        roomState={roomState}
+        onLeave={handleLeave}
+        onRefetch={refetchRoom}
+      />
+    );
   }
 
   if (roomState.status === "playing" || roomState.status === "countdown") {
@@ -436,7 +448,7 @@ function RoomLobby({ code }: { code: string }) {
         />
 
         <div className="flex flex-col gap-3">
-          {!isHost && (
+          {!isHost && !isSpectator && (
             <Button
               variant={myReady ? "primary" : "secondary"}
               size="lg"
