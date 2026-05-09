@@ -4,6 +4,9 @@ import { z } from "zod"
 import { pusher } from "@/lib/pusher"
 import { Player, RoomSettings } from "@/lib/types"
 import { getRoom, joinRoom, leaveRoom, saveRoom } from "@/lib/rooms"
+import { getCategoryPrompt } from "@/lib/targets"
+import { falGenerate } from "@/lib/fal"
+import { clipEmbed } from "@/lib/replicate"
 
 const JoinAction = z.object({
   action: z.literal("join"),
@@ -89,7 +92,6 @@ export async function POST(
       joinedAt: Date.now(),
       connected: true,
       lastSeenAt: Date.now(),
-
     }
 
     const { room: updatedRoom, role } = await joinRoom(room, player)
@@ -168,16 +170,59 @@ export async function POST(
       return NextResponse.json({ error: "not all players ready" }, { status: 400 })
     }
 
-    room.status = "playing"
+    // Phase 1: flip to "generating" + unready players + broadcast.
+    // Players' clients show a loading state while FLUX/CLIP run (~2s warm).
+    room.status = "generating"
     room.currentRound = 1
     room.players.forEach((p) => { p.ready = false })
     await saveRoom(room)
-
-    await pusher.trigger(`presence-room-${code}`, "round-starting", {
-      status: "playing",
+    await pusher.trigger(`presence-room-${code}`, "round-generating", {
+      status: "generating",
       round: room.currentRound,
     })
 
-    return NextResponse.json({ room })
+    // Phase 2: pick category prompt → FLUX target image → CLIP-embed once.
+    // The embedding is cached on the room so per-submission scoring is just
+    // one CLIP call + a JS cosine.
+    try {
+      const { prompt, seed } = getCategoryPrompt(room.settings.category)
+      const { imageUrl } = await falGenerate(prompt, seed)
+      const targetEmbedding = await clipEmbed(imageUrl)
+
+      room.targetImageUrl = imageUrl
+      room.targetPrompt = prompt // server-only, never broadcast until reveal
+      room.targetEmbedding = targetEmbedding
+      room.seed = seed
+      room.status = "playing"
+      await saveRoom(room)
+
+      // Broadcast image + category. Prompt and embedding stay server-side.
+      await pusher.trigger(`presence-room-${code}`, "round-starting", {
+        status: "playing",
+        round: room.currentRound,
+        targetImageUrl: imageUrl,
+        category: room.settings.category,
+      })
+
+      return NextResponse.json({ room })
+    } catch (err) {
+      // Revert to lobby on FLUX/CLIP failure so the host can retry.
+      room.status = "lobby"
+      room.targetImageUrl = null
+      room.targetPrompt = null
+      room.targetEmbedding = null
+      room.seed = null
+      await saveRoom(room)
+      await pusher.trigger(`presence-room-${code}`, "round-failed", {
+        error: err instanceof Error ? err.message : "round generation failed",
+      })
+      return NextResponse.json(
+        {
+          error: "round generation failed",
+          message: err instanceof Error ? err.message : String(err),
+        },
+        { status: 502 }
+      )
+    }
   }
 }

@@ -1,0 +1,52 @@
+{
+  "animals": {
+    "label": "Animals",
+    "emoji": "🐾",
+    "prompts": [
+      "a red fox curled up in autumn leaves, golden hour light, photorealistic",
+      "an octopus drifting through a coral reef, underwater photography, clear blue water",
+      "a snowy owl mid-flight against a misty pine forest, dawn light"
+    ],
+    "seedRange": [1, 1000000]
+  },
+  "landmarks": {
+    "label": "Landmarks",
+    "emoji": "🏛️",
+    "prompts": [
+      "the Eiffel Tower at dusk, soft purple sky, distant city lights",
+      "the Great Pyramids of Giza under a clear blue sky, midday sun",
+      "the Sydney Opera House from the harbor, cloudy afternoon, calm water"
+    ],
+    "seedRange": [1, 1000000]
+  },
+  "foods": {
+    "label": "Foods",
+    "emoji": "🍔",
+    "prompts": [
+      "a stack of fluffy pancakes drizzled with maple syrup, pat of butter on top, morning light",
+      "a bowl of ramen with a soft-boiled egg and green onions, top-down food photography",
+      "a slice of New York cheesecake on a white plate, raspberry coulis, studio lighting"
+    ],
+    "seedRange": [1, 1000000]
+  },
+  "nature": {
+    "label": "Nature",
+    "emoji": "🌲",
+    "prompts": [
+      "a misty mountain valley at sunrise, layered ridges, no people, photorealistic landscape",
+      "a tropical waterfall cascading into a rocky pool, lush ferns, soft daylight",
+      "a vast desert dunes under a starry night sky, milky way visible"
+    ],
+    "seedRange": [1, 1000000]
+  },
+  "characters": {
+    "label": "Fictional Characters",
+    "emoji": "🧙",
+    "prompts": [
+      "a hooded wizard holding a glowing staff in a stone library, dramatic lighting",
+      "a weathered space marine in armor on an alien desert planet, twin suns",
+      "a samurai standing in falling cherry blossoms, traditional armor, dawn"
+    ],
+    "seedRange": [1, 1000000]
+  }
+}
