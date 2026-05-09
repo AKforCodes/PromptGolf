@@ -1,76 +1,93 @@
-import { cookies } from "next/headers"
-import { NextResponse } from "next/server"
-import { z } from "zod"
-import { customAlphabet } from "nanoid"
-import { pusher } from "@/lib/pusher"
-import { redis } from "@/lib/redis"
-import { getRoom } from "@/lib/rooms"
-import { falGenerate } from "@/lib/fal"
-import type { Attempt } from "@/lib/types"
+import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { customAlphabet } from "nanoid";
+import { pusher } from "@/lib/pusher";
+import { redis } from "@/lib/redis";
+import { getRoom } from "@/lib/rooms";
+import { falGenerate } from "@/lib/fal";
+import type { Attempt } from "@/lib/types";
 
-const ATTEMPT_TTL = 3600
-const DEBOUNCE_SECONDS = 3
+const ATTEMPT_TTL = 3600;
+const DEBOUNCE_SECONDS = 3;
 
-const nanoidShort = customAlphabet("0123456789abcdefghijklmnopqrstuvwxyz", 12)
+const nanoidShort = customAlphabet("0123456789abcdefghijklmnopqrstuvwxyz", 12);
 
 const GenerateInput = z.object({
   roomCode: z.string().length(4),
   prompt: z.string().min(1).max(200),
-})
+});
 
 function attemptsKey(code: string, round: number): string {
-  return `room:${code}:attempts:${round}`
+  return `room:${code}:attempts:${round}`;
 }
 
 function debounceKey(code: string, userId: string): string {
-  return `room:${code}:debounce:${userId}`
+  return `room:${code}:debounce:${userId}`;
 }
 
 export async function POST(request: Request) {
-  const cookieStore = await cookies()
-  const userId = cookieStore.get("user_id")?.value
+  const cookieStore = await cookies();
+  const userId = cookieStore.get("user_id")?.value;
   if (!userId) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 })
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
 
-  const body = await request.json()
-  const parsed = GenerateInput.safeParse(body)
+  const body = await request.json();
+  const parsed = GenerateInput.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
+    return NextResponse.json(
+      { error: parsed.error.flatten() },
+      { status: 400 },
+    );
   }
-  const { roomCode, prompt } = parsed.data
+  const { roomCode, prompt } = parsed.data;
 
-  const room = await getRoom(roomCode)
+  const room = await getRoom(roomCode);
   if (!room) {
-    return NextResponse.json({ error: "room not found" }, { status: 404 })
+    return NextResponse.json({ error: "room not found" }, { status: 404 });
   }
   if (!room.players.some((p) => p.userId === userId)) {
-    return NextResponse.json({ error: "not in room" }, { status: 403 })
+    return NextResponse.json({ error: "not in room" }, { status: 403 });
   }
   if (room.status !== "playing") {
-    return NextResponse.json({ error: "round is not active" }, { status: 409 })
+    return NextResponse.json({ error: "round is not active" }, { status: 409 });
+  }
+  // Reject submissions during the memorize sub-phase (image is still visible
+  // to the player). Memorize window = (phaseEndsAt - now) > timer * 1000.
+  if (
+    room.phaseEndsAt != null &&
+    room.phaseEndsAt - Date.now() > room.settings.timer * 1000
+  ) {
+    return NextResponse.json(
+      { error: "still memorizing — wait for the prompt phase" },
+      { status: 409 },
+    );
   }
   if (prompt.length > room.settings.promptMaxLength) {
     return NextResponse.json(
       { error: `prompt too long (max ${room.settings.promptMaxLength})` },
-      { status: 400 }
-    )
+      { status: 400 },
+    );
   }
   if (room.seed == null) {
-    return NextResponse.json({ error: "round target not ready" }, { status: 503 })
+    return NextResponse.json(
+      { error: "round target not ready" },
+      { status: 503 },
+    );
   }
 
   // Per-round attempts cap. Read existing attempts so we can both enforce
   // the cap and append after a successful gen — same Redis read serves both.
-  const key = attemptsKey(roomCode, room.currentRound)
-  const existing = ((await redis.get(key)) as Attempt[] | null) ?? []
-  const usedAttempts = existing.filter((a) => a.userId === userId).length
-  const cap = room.settings.attemptsPerRound
+  const key = attemptsKey(roomCode, room.currentRound);
+  const existing = ((await redis.get(key)) as Attempt[] | null) ?? [];
+  const usedAttempts = existing.filter((a) => a.userId === userId).length;
+  const cap = room.settings.attemptsPerRound;
   if (usedAttempts >= cap) {
     return NextResponse.json(
       { error: `attempt cap reached (${cap} per round)`, attemptsRemaining: 0 },
-      { status: 409 }
-    )
+      { status: 409 },
+    );
   }
 
   // Per-player debounce. Atomic NX + TTL: succeeds if no key exists, fails
@@ -78,18 +95,18 @@ export async function POST(request: Request) {
   const debounced = await redis.set(debounceKey(roomCode, userId), "1", {
     nx: true,
     ex: DEBOUNCE_SECONDS,
-  })
+  });
   if (debounced !== "OK") {
     return NextResponse.json(
       { error: `submitting too fast — wait ${DEBOUNCE_SECONDS}s` },
-      { status: 429 }
-    )
+      { status: 429 },
+    );
   }
 
   try {
     // Reuse the round's seed so the candidate generation lives in the same
     // FLUX latent space as the target.
-    const { imageUrl: candidateUrl } = await falGenerate(prompt, room.seed)
+    const { imageUrl: candidateUrl } = await falGenerate(prompt, room.seed);
 
     // similarity/qualified are vestigial — kept on the schema for forward-compat
     // in case CLIP scoring is reintroduced. Defaults are 0/false.
@@ -103,24 +120,29 @@ export async function POST(request: Request) {
       chars: prompt.length,
       tokens: Math.ceil(prompt.length / 4),
       submittedAt: Date.now(),
-    }
+    };
 
-    const attempts = [...existing, attempt]
-    await redis.set(key, attempts, { ex: ATTEMPT_TTL })
+    const attempts = [...existing, attempt];
+    await redis.set(key, attempts, { ex: ATTEMPT_TTL });
 
-    await pusher.trigger(`presence-room-${roomCode}`, "attempt-submitted", attempt)
+    await pusher.trigger(
+      `presence-room-${roomCode}`,
+      "attempt-submitted",
+      attempt,
+    );
 
     return NextResponse.json({
       attempt,
-      attemptsRemaining: cap - attempts.filter((a) => a.userId === userId).length,
-    })
+      attemptsRemaining:
+        cap - attempts.filter((a) => a.userId === userId).length,
+    });
   } catch (err) {
     return NextResponse.json(
       {
         error: "generation failed",
         message: err instanceof Error ? err.message : String(err),
       },
-      { status: 502 }
-    )
+      { status: 502 },
+    );
   }
 }

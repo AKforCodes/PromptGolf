@@ -1,11 +1,20 @@
 "use client";
 
-import { Suspense, use, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  Suspense,
+  use,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import type { Channel } from "pusher-js";
-import type { Attempt, Player, RoomSettings, RoomState } from "@/lib/types";
+import type { Player, RoomSettings, RoomState } from "@/lib/types";
 import { tryCatch } from "@/lib/result";
 import {
+  advanceRoom,
   ApiError,
   getRoom,
   joinRoom,
@@ -13,7 +22,6 @@ import {
   readyRoom,
   seedUser,
   startRoom,
-  submitPrompt,
   updateRoomSettings,
 } from "@/lib/api";
 import { getPusher } from "@/lib/pusher-client";
@@ -27,6 +35,11 @@ import { RoundSummaryCard } from "@/components/lobby/round-summary-card";
 import { ShareCard } from "@/components/lobby/share-card";
 import { PlayingView } from "@/components/play/playing-view";
 import { RoundLoadingView } from "@/components/play/round-loading-view";
+import {
+  EndedView,
+  RevealView,
+  VotingView,
+} from "@/components/play/phase-views";
 
 interface RoomPageProps {
   params: Promise<{ code: string }>;
@@ -64,13 +77,9 @@ function RoomLobby({ code }: { code: string }) {
 
   const [localSettings, setLocalSettings] = useState<RoomSettings | null>(null);
 
-  const [attempts, setAttempts] = useState<Attempt[]>([]);
-  const [submitBusy, setSubmitBusy] = useState<boolean>(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-
   const isHost = useMemo(
     () => Boolean(roomState && userId && roomState.hostId === userId),
-    [roomState, userId]
+    [roomState, userId],
   );
 
   const channelRef = useRef<Channel | null>(null);
@@ -110,7 +119,7 @@ function RoomLobby({ code }: { code: string }) {
         setFatalError(
           getErr instanceof ApiError && getErr.status === 404
             ? "Room not found."
-            : "Could not load the room."
+            : "Could not load the room.",
         );
         return;
       }
@@ -156,14 +165,15 @@ function RoomLobby({ code }: { code: string }) {
     channel.bind("player-left", onChange);
     channel.bind("player-ready", onChange);
     channel.bind("settings-updated", onChange);
-    channel.bind("round-starting", onChange);
     channel.bind("round-generating", onChange);
+    channel.bind("round-starting", onChange);
     channel.bind("round-failed", onChange);
-    channel.bind("attempt-submitted", (data: Attempt) => {
-      setAttempts((prev) =>
-        prev.some((a) => a.id === data.id) ? prev : [...prev, data]
-      );
-    });
+    channel.bind("attempt-submitted", onChange);
+    channel.bind("pick-changed", onChange);
+    channel.bind("voting-starting", onChange);
+    channel.bind("vote-submitted", onChange);
+    channel.bind("reveal-starting", onChange);
+    channel.bind("game-ended", onChange);
 
     return () => {
       const ch = channelRef.current;
@@ -175,11 +185,42 @@ function RoomLobby({ code }: { code: string }) {
     };
   }, [phase, code, refetchRoom]);
 
-  // Reset round-local state when the round number changes.
+  // Page-level auto-advance. When the server-stamped phase deadline elapses,
+  // any client can fire `advance` — the server gates on phaseEndsAt so a
+  // tiny race between clients is harmless (later one gets a 409 and we
+  // ignore it). The ref ensures we fire at most once per deadline.
+  const advancedForRef = useRef<number | null>(null);
   useEffect(() => {
-    setAttempts([]);
-    setSubmitError(null);
-  }, [roomState?.currentRound]);
+    if (!roomState) return;
+    if (phase !== "ready") return;
+    const { status, phaseEndsAt } = roomState;
+    if (phaseEndsAt == null) return;
+    if (status !== "playing" && status !== "voting" && status !== "reveal") {
+      return;
+    }
+
+    let cancelled = false;
+    const fire = async () => {
+      if (cancelled) return;
+      if (advancedForRef.current === phaseEndsAt) return;
+      advancedForRef.current = phaseEndsAt;
+      const [err] = await tryCatch(advanceRoom(code));
+      if (err && !(err instanceof ApiError && err.status === 409)) {
+        console.error("advance failed:", err);
+      }
+    };
+
+    const remaining = phaseEndsAt - Date.now();
+    if (remaining <= 0) {
+      void fire();
+      return;
+    }
+    const timeout = setTimeout(() => void fire(), remaining + 50);
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [roomState, phase, code]);
 
   // Non-host: keep local settings mirrored from server.
   useEffect(() => {
@@ -216,12 +257,11 @@ function RoomLobby({ code }: { code: string }) {
   const allReady =
     nonHostPlayers.length > 0 && nonHostPlayers.every((p) => p.ready);
   const canStart = isHost && allReady && players.length >= 2;
-  const myReady =
-    players.find((p) => p.userId === userId)?.ready ?? false;
+  const myReady = players.find((p) => p.userId === userId)?.ready ?? false;
 
   const update = <K extends keyof RoomSettings>(
     key: K,
-    value: RoomSettings[K]
+    value: RoomSettings[K],
   ) => {
     if (!isHost) return;
     setLocalSettings((s) => ({ ...(s ?? settings), [key]: value }));
@@ -241,7 +281,7 @@ function RoomLobby({ code }: { code: string }) {
       setJoinError(
         err instanceof ApiError && err.status === 404
           ? "Room not found."
-          : "Could not join this room."
+          : "Could not join this room.",
       );
       setJoinBusy(false);
       return;
@@ -251,24 +291,6 @@ function RoomLobby({ code }: { code: string }) {
     setLocalSettings(data.room.settings);
     setJoinBusy(false);
     setPhase("ready");
-  };
-
-  const handleSubmitPrompt = async (promptText: string): Promise<boolean> => {
-    if (submitBusy) return false;
-    setSubmitError(null);
-    setSubmitBusy(true);
-    const [err, data] = await tryCatch(submitPrompt(code, promptText));
-    setSubmitBusy(false);
-    if (err) {
-      setSubmitError(
-        err instanceof ApiError ? err.message || `Failed (${err.status})` : "Network error"
-      );
-      return false;
-    }
-    setAttempts((prev) =>
-      prev.some((a) => a.id === data.attempt.id) ? prev : [...prev, data.attempt]
-    );
-    return true;
   };
 
   const handleReadyToggle = async () => {
@@ -294,7 +316,7 @@ function RoomLobby({ code }: { code: string }) {
       setStartError(
         err instanceof ApiError
           ? err.message || `Couldn't start (${err.status})`
-          : "Network error"
+          : "Network error",
       );
       return;
     }
@@ -361,16 +383,30 @@ function RoomLobby({ code }: { code: string }) {
   if (roomState.status === "playing" || roomState.status === "countdown") {
     return (
       <PlayingView
+        key={roomState.currentRound}
         code={code}
         roomState={roomState}
         userId={userId}
-        attempts={attempts}
-        submitBusy={submitBusy}
-        submitError={submitError}
-        onSubmit={handleSubmitPrompt}
-        onClearError={() => setSubmitError(null)}
         onLeave={handleLeave}
       />
+    );
+  }
+
+  if (roomState.status === "voting") {
+    return (
+      <VotingView roomState={roomState} userId={userId} onLeave={handleLeave} />
+    );
+  }
+
+  if (roomState.status === "reveal") {
+    return (
+      <RevealView roomState={roomState} userId={userId} onLeave={handleLeave} />
+    );
+  }
+
+  if (roomState.status === "ended") {
+    return (
+      <EndedView roomState={roomState} userId={userId} onLeave={handleLeave} />
     );
   }
 
@@ -422,8 +458,8 @@ function RoomLobby({ code }: { code: string }) {
               {players.length < 2
                 ? "Waiting for players…"
                 : !allReady
-                ? "Waiting on ready up…"
-                : "Start Round"}
+                  ? "Waiting on ready up…"
+                  : "Start Round"}
             </Button>
           )}
           {startError && (

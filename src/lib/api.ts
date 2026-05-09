@@ -1,4 +1,4 @@
-import type { Attempt, RoomSettings, RoomState } from "./types";
+import type { Attempt, RoomSettings, RoomState, Vote } from "./types";
 
 export interface SeedResponse {
   user_id: string;
@@ -17,8 +17,26 @@ export interface LeaveRoomResponse {
   room: RoomState;
 }
 
+export interface GenerateResponse {
+  attempt: Attempt;
+  attemptsRemaining: number;
+}
+
+export interface RoundDetailsResponse {
+  round: number;
+  finalAttempts: Attempt[];
+  myAttempts: Attempt[];
+  myPick: string | null;
+  votes: Vote[];
+  targetImageUrl: string | null;
+  targetPrompt: string | null;
+}
+
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -46,7 +64,7 @@ export async function seedUser(): Promise<SeedResponse> {
 export async function createRoom(
   name: string,
   avatarSeed: string,
-  settings: RoomSettings
+  settings: RoomSettings,
 ): Promise<CreateRoomResponse> {
   const res = await fetch("/api/v1/rooms", {
     method: "POST",
@@ -67,7 +85,7 @@ export async function getRoom(code: string): Promise<{ room: RoomState }> {
 export async function joinRoom(
   code: string,
   name: string,
-  avatarSeed: string
+  avatarSeed: string,
 ): Promise<JoinRoomResponse> {
   const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
     method: "POST",
@@ -80,7 +98,7 @@ export async function joinRoom(
 
 export async function updateRoomSettings(
   code: string,
-  settings: RoomSettings
+  settings: RoomSettings,
 ): Promise<{ room: RoomState }> {
   const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
     method: "POST",
@@ -93,7 +111,7 @@ export async function updateRoomSettings(
 
 export async function readyRoom(
   code: string,
-  ready: boolean
+  ready: boolean,
 ): Promise<{ room: RoomState }> {
   const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
     method: "POST",
@@ -102,24 +120,6 @@ export async function readyRoom(
     body: JSON.stringify({ action: ready ? "ready" : "unready" }),
   });
   return asJson<{ room: RoomState }>(res);
-}
-
-export interface SubmitPromptResponse {
-  attempt: Attempt;
-  attemptsRemaining: number;
-}
-
-export async function submitPrompt(
-  roomCode: string,
-  prompt: string
-): Promise<SubmitPromptResponse> {
-  const res = await fetch(`/api/v1/generate`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ roomCode, prompt }),
-  });
-  return asJson<SubmitPromptResponse>(res);
 }
 
 export async function startRoom(code: string): Promise<{ room: RoomState }> {
@@ -140,6 +140,66 @@ export async function leaveRoom(code: string): Promise<LeaveRoomResponse> {
     body: JSON.stringify({ action: "leave" }),
   });
   return asJson<LeaveRoomResponse>(res);
+}
+
+export async function advanceRoom(code: string): Promise<{ room: RoomState }> {
+  const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "advance" }),
+  });
+  return asJson<{ room: RoomState }>(res);
+}
+
+export async function pickAttempt(
+  code: string,
+  attemptId: string,
+): Promise<{ room: RoomState }> {
+  const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "pick", attemptId }),
+  });
+  return asJson<{ room: RoomState }>(res);
+}
+
+export async function submitGeneration(
+  code: string,
+  prompt: string,
+): Promise<GenerateResponse> {
+  const res = await fetch("/api/v1/generate", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roomCode: code, prompt }),
+  });
+  return asJson<GenerateResponse>(res);
+}
+
+export async function submitVote(
+  code: string,
+  targetUserId: string,
+): Promise<{ vote: Vote }> {
+  const res = await fetch("/api/v1/vote", {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ roomCode: code, targetUserId }),
+  });
+  return asJson<{ vote: Vote }>(res);
+}
+
+export async function getRoundDetails(
+  code: string,
+  round: number,
+): Promise<RoundDetailsResponse> {
+  const res = await fetch(
+    `/api/v1/rooms/${encodeURIComponent(code)}/round/${round}`,
+    { credentials: "include" },
+  );
+  return asJson<RoundDetailsResponse>(res);
 }
 
 export const DEFAULT_ROOM_SETTINGS: RoomSettings = {

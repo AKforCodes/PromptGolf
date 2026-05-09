@@ -1,55 +1,60 @@
-import { cookies } from "next/headers"
-import { NextResponse } from "next/server"
-import { z } from "zod"
-import { pusher } from "@/lib/pusher"
-import { redis } from "@/lib/redis"
-import { Player, RoomSettings } from "@/lib/types"
-import type { Attempt, RoomState, Vote } from "@/lib/types"
-import { getRoom, joinRoom, leaveRoom, saveRoom, setPlayerReady } from "@/lib/rooms"
-import { getCategoryPrompt } from "@/lib/targets"
-import { falGenerate } from "@/lib/fal"
-import { awardRoundScores, selectFinalAttempts } from "@/lib/scoring"
+import { cookies } from "next/headers";
+import { NextResponse } from "next/server";
+import { z } from "zod";
+import { pusher } from "@/lib/pusher";
+import { redis } from "@/lib/redis";
+import { Player, RoomSettings } from "@/lib/types";
+import type { Attempt, RoomState, Vote } from "@/lib/types";
+import {
+  getRoom,
+  joinRoom,
+  leaveRoom,
+  saveRoom,
+  setPlayerReady,
+} from "@/lib/rooms";
+import { getCategoryPrompt } from "@/lib/targets";
+import { falGenerate } from "@/lib/fal";
+import { awardRoundScores, selectFinalAttempts } from "@/lib/scoring";
 
 // Phase durations (ms). `playing` uses room.settings.timer (host-configurable).
-const VOTING_DURATION_MS = 20_000
-
-const REVEAL_DURATION_MS = 15_000
+const VOTING_DURATION_MS = 20_000;
+const REVEAL_DURATION_MS = 15_000;
 
 const JoinAction = z.object({
   action: z.literal("join"),
   name: z.string().min(1).max(30),
   avatarSeed: z.string(),
-})
+});
 
 const LeaveAction = z.object({
   action: z.literal("leave"),
-})
+});
 
 const UpdateAction = z.object({
   action: z.literal("update"),
   settings: RoomSettings,
-})
+});
 
 const ReadyAction = z.object({
   action: z.literal("ready"),
-})
+});
 
 const UnreadyAction = z.object({
   action: z.literal("unready"),
-})
+});
 
 const StartAction = z.object({
   action: z.literal("start"),
-})
+});
 
 const AdvanceAction = z.object({
   action: z.literal("advance"),
-})
+});
 
 const PickAction = z.object({
   action: z.literal("pick"),
   attemptId: z.string(),
-})
+});
 
 const RoomAction = z.discriminatedUnion("action", [
   JoinAction,
@@ -60,46 +65,49 @@ const RoomAction = z.discriminatedUnion("action", [
   StartAction,
   AdvanceAction,
   PickAction,
-])
+]);
 
 export async function GET(
   _request: Request,
-  { params }: { params: Promise<{ code: string }> }
+  { params }: { params: Promise<{ code: string }> },
 ) {
-  const { code } = await params
-  const room = await getRoom(code)
+  const { code } = await params;
+  const room = await getRoom(code);
   if (!room) {
-    return NextResponse.json({ error: "room not found" }, { status: 404 })
+    return NextResponse.json({ error: "room not found" }, { status: 404 });
   }
-  return NextResponse.json({ room })
+  return NextResponse.json({ room });
 }
 
 export async function POST(
   request: Request,
-  { params }: { params: Promise<{ code: string }> }
+  { params }: { params: Promise<{ code: string }> },
 ) {
-  const cookieStore = await cookies()
-  const userId = cookieStore.get("user_id")?.value
+  const cookieStore = await cookies();
+  const userId = cookieStore.get("user_id")?.value;
   if (!userId) {
-    return NextResponse.json({ error: "unauthenticated" }, { status: 401 })
+    return NextResponse.json({ error: "unauthenticated" }, { status: 401 });
   }
 
-  const { code } = await params
-  const room = await getRoom(code)
+  const { code } = await params;
+  const room = await getRoom(code);
   if (!room) {
-    return NextResponse.json({ error: "room not found" }, { status: 404 })
+    return NextResponse.json({ error: "room not found" }, { status: 404 });
   }
 
-  const body = await request.json()
-  const parsed = RoomAction.safeParse(body)
+  const body = await request.json();
+  const parsed = RoomAction.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 })
+    return NextResponse.json(
+      { error: parsed.error.flatten() },
+      { status: 400 },
+    );
   }
 
-  const { action } = parsed.data
+  const { action } = parsed.data;
 
   if (action === "join") {
-    const { name, avatarSeed } = parsed.data
+    const { name, avatarSeed } = parsed.data;
 
     const player: Player = {
       userId,
@@ -110,87 +118,95 @@ export async function POST(
       joinedAt: Date.now(),
       connected: true,
       lastSeenAt: Date.now(),
-    }
+    };
 
-    const { room: updatedRoom, role } = await joinRoom(room, player)
-
+    const { room: updatedRoom, role } = await joinRoom(room, player);
 
     await pusher.trigger(`presence-room-${code}`, "player-joined", {
       userId,
       name,
       avatarSeed,
       role,
-    })
+    });
 
-    return NextResponse.json({ room: updatedRoom, role })
+    return NextResponse.json({ room: updatedRoom, role });
   }
 
   if (action === "leave") {
-    const updatedRoom = await leaveRoom(room, userId)
+    const updatedRoom = await leaveRoom(room, userId);
 
     await pusher.trigger(`presence-room-${code}`, "player-left", {
       userId,
-    })
+    });
 
-    return NextResponse.json({ room: updatedRoom })
+    return NextResponse.json({ room: updatedRoom });
   }
 
   if (action === "update") {
     if (room.hostId !== userId) {
-      return NextResponse.json({ error: "host only" }, { status: 403 })
+      return NextResponse.json({ error: "host only" }, { status: 403 });
     }
     if (room.status !== "lobby") {
       return NextResponse.json(
         { error: "settings locked once round starts" },
-        { status: 409 }
-      )
+        { status: 409 },
+      );
     }
 
-    room.settings = parsed.data.settings
-    await saveRoom(room)
+    room.settings = parsed.data.settings;
+    await saveRoom(room);
 
     await pusher.trigger(`presence-room-${code}`, "settings-updated", {
       settings: room.settings,
-    })
+    });
 
-    return NextResponse.json({ room })
+    return NextResponse.json({ room });
   }
 
   if (action === "ready" || action === "unready") {
     const { room: updatedRoom, player } = await setPlayerReady(
       room,
       userId,
-      action === "ready"
-    )
+      action === "ready",
+    );
     if (!player) {
-      return NextResponse.json({ error: "not in room" }, { status: 403 })
+      return NextResponse.json({ error: "not in room" }, { status: 403 });
     }
 
     await pusher.trigger(`presence-room-${code}`, "player-ready", {
       userId,
       ready: player.ready,
-    })
+    });
 
-    return NextResponse.json({ room: updatedRoom })
+    return NextResponse.json({ room: updatedRoom });
   }
 
   if (action === "start") {
     if (room.hostId !== userId) {
-      return NextResponse.json({ error: "host only" }, { status: 403 })
+      return NextResponse.json({ error: "host only" }, { status: 403 });
     }
     if (room.status !== "lobby") {
-      return NextResponse.json({ error: "game already started" }, { status: 409 })
+      return NextResponse.json(
+        { error: "game already started" },
+        { status: 409 },
+      );
     }
 
-    const nonHostPlayers = room.players.filter((p) => p.userId !== room.hostId)
+    const nonHostPlayers = room.players.filter((p) => p.userId !== room.hostId);
     if (nonHostPlayers.length < 1) {
-      return NextResponse.json({ error: "need at least 1 other player" }, { status: 400 })
+      return NextResponse.json(
+        { error: "need at least 1 other player" },
+        { status: 400 },
+      );
     }
     if (!nonHostPlayers.every((p) => p.ready)) {
-      return NextResponse.json({ error: "not all players ready" }, { status: 400 })
+      return NextResponse.json(
+        { error: "not all players ready" },
+        { status: 400 },
+      );
     }
 
-    return generateRoundTarget(room, code)
+    return generateRoundTarget(room, code);
   }
 
   if (action === "advance") {
@@ -199,45 +215,45 @@ export async function POST(
     // hits 0; the server validates server-stamped `phaseEndsAt` to prevent
     // early advances.
     if (!room.players.some((p) => p.userId === userId)) {
-      return NextResponse.json({ error: "not in room" }, { status: 403 })
+      return NextResponse.json({ error: "not in room" }, { status: 403 });
     }
     if (room.phaseEndsAt != null && Date.now() < room.phaseEndsAt) {
       return NextResponse.json(
         { error: "phase not yet ended", phaseEndsAt: room.phaseEndsAt },
-        { status: 409 }
-      )
+        { status: 409 },
+      );
     }
 
     if (room.status === "playing") {
       // playing → voting
-      room.status = "voting"
-      room.phaseEndsAt = Date.now() + VOTING_DURATION_MS
-      await saveRoom(room)
+      room.status = "voting";
+      room.phaseEndsAt = Date.now() + VOTING_DURATION_MS;
+      await saveRoom(room);
       await pusher.trigger(`presence-room-${code}`, "voting-starting", {
         status: "voting",
         round: room.currentRound,
         phaseEndsAt: room.phaseEndsAt,
-      })
-      return NextResponse.json({ room })
+      });
+      return NextResponse.json({ room });
     }
 
     if (room.status === "voting") {
       // voting → reveal: dedup attempts to one final per player (pick → fallback to last-submitted),
       // award vote points, reveal target prompt.
       const attempts =
-        ((await redis.get(
-          `room:${code}:attempts:${room.currentRound}`
-        )) as Attempt[] | null) ?? []
+        ((await redis.get(`room:${code}:attempts:${room.currentRound}`)) as
+          | Attempt[]
+          | null) ?? [];
       const votes =
-        ((await redis.get(
-          `room:${code}:votes:${room.currentRound}`
-        )) as Vote[] | null) ?? []
+        ((await redis.get(`room:${code}:votes:${room.currentRound}`)) as
+          | Vote[]
+          | null) ?? [];
 
-      const finals = selectFinalAttempts(attempts, room.picks)
-      room.scores = awardRoundScores(room.scores, finals, votes)
-      room.status = "reveal"
-      room.phaseEndsAt = Date.now() + REVEAL_DURATION_MS
-      await saveRoom(room)
+      const finals = selectFinalAttempts(attempts, room.picks);
+      room.scores = awardRoundScores(room.scores, finals, votes);
+      room.status = "reveal";
+      room.phaseEndsAt = Date.now() + REVEAL_DURATION_MS;
+      await saveRoom(room);
 
       await pusher.trigger(`presence-room-${code}`, "reveal-starting", {
         status: "reveal",
@@ -245,70 +261,70 @@ export async function POST(
         phaseEndsAt: room.phaseEndsAt,
         targetPrompt: room.targetPrompt, // finally surfaced
         scores: room.scores,
-      })
-      return NextResponse.json({ room })
+      });
+      return NextResponse.json({ room });
     }
 
     if (room.status === "reveal") {
       // reveal → next round, OR ended if last round
       if (room.currentRound >= room.settings.rounds) {
-        room.status = "ended"
-        room.phaseEndsAt = null
-        await saveRoom(room)
+        room.status = "ended";
+        room.phaseEndsAt = null;
+        await saveRoom(room);
         await pusher.trigger(`presence-room-${code}`, "game-ended", {
           status: "ended",
           scores: room.scores,
-        })
-        return NextResponse.json({ room })
+        });
+        return NextResponse.json({ room });
       }
-      return generateRoundTarget(room, code)
+      return generateRoundTarget(room, code);
     }
 
     return NextResponse.json(
       { error: `cannot advance from ${room.status}` },
-      { status: 409 }
-    )
+      { status: 409 },
+    );
   }
 
   if (action === "pick") {
     // Pull attemptId off parsed.data while narrowing is still in scope —
     // narrowing is lost across the `await` below for closure-captured access.
-    const { attemptId } = parsed.data
+    const { attemptId } = parsed.data;
 
     if (!room.players.some((p) => p.userId === userId)) {
-      return NextResponse.json({ error: "not in room" }, { status: 403 })
+      return NextResponse.json({ error: "not in room" }, { status: 403 });
     }
     if (room.status !== "playing") {
       return NextResponse.json(
         { error: "can only pick during playing phase" },
-        { status: 409 }
-      )
+        { status: 409 },
+      );
     }
 
     // Verify the attempt belongs to this user (else they could "pick"
     // someone else's attempt and have it count for them).
     const attempts =
-      ((await redis.get(
-        `room:${code}:attempts:${room.currentRound}`
-      )) as Attempt[] | null) ?? []
+      ((await redis.get(`room:${code}:attempts:${room.currentRound}`)) as
+        | Attempt[]
+        | null) ?? [];
     const owns = attempts.some(
-      (a) => a.id === attemptId && a.userId === userId
-    )
+      (a) => a.id === attemptId && a.userId === userId,
+    );
     if (!owns) {
       return NextResponse.json(
         { error: "attempt not found or not yours" },
-        { status: 400 }
-      )
+        { status: 400 },
+      );
     }
 
-    room.picks = { ...room.picks, [userId]: attemptId }
-    await saveRoom(room)
+    room.picks = { ...room.picks, [userId]: attemptId };
+    await saveRoom(room);
     // Pick stays private — broadcast existence only so others can see "X picked".
     await pusher.trigger(`presence-room-${code}`, "pick-changed", {
       userId,
       round: room.currentRound,
-    })
-    return NextResponse.json({ room })
+    });
+    return NextResponse.json({ room });
   }
 }
 
@@ -322,36 +338,39 @@ export async function POST(
 // reverts to lobby and broadcasts `round-failed`.
 async function generateRoundTarget(
   room: RoomState,
-  code: string
+  code: string,
 ): Promise<NextResponse> {
   // Phase 1: flip to "generating" + unready players + clear stale round data.
-  room.status = "generating"
-  room.currentRound += 1
-  room.targetImageUrl = null
-  room.targetPrompt = null
-  room.seed = null
-  room.phaseEndsAt = null
-  room.picks = {}
+  room.status = "generating";
+  room.currentRound += 1;
+  room.targetImageUrl = null;
+  room.targetPrompt = null;
+  room.seed = null;
+  room.phaseEndsAt = null;
+  room.picks = {};
   room.players.forEach((p) => {
-    p.ready = false
-  })
-  await saveRoom(room)
+    p.ready = false;
+  });
+  await saveRoom(room);
   await pusher.trigger(`presence-room-${code}`, "round-generating", {
     status: "generating",
     round: room.currentRound,
-  })
+  });
 
   // Phase 2: FLUX target.
   try {
-    const { prompt, seed } = getCategoryPrompt(room.settings.category)
-    const { imageUrl } = await falGenerate(prompt, seed)
+    const { prompt, seed } = getCategoryPrompt(room.settings.category);
+    const { imageUrl } = await falGenerate(prompt, seed);
 
-    room.targetImageUrl = imageUrl
-    room.targetPrompt = prompt // server-only until reveal
-    room.seed = seed
-    room.status = "playing"
-    room.phaseEndsAt = Date.now() + room.settings.timer * 1000
-    await saveRoom(room)
+    room.targetImageUrl = imageUrl;
+    room.targetPrompt = prompt; // server-only until reveal
+    room.seed = seed;
+    room.status = "playing";
+    // Total playing-phase budget = memorize (image visible) + timer (prompting).
+    // Client splits these locally based on remaining vs settings.timer.
+    room.phaseEndsAt =
+      Date.now() + (room.settings.memorizeTime + room.settings.timer) * 1000;
+    await saveRoom(room);
 
     await pusher.trigger(`presence-room-${code}`, "round-starting", {
       status: "playing",
@@ -359,26 +378,26 @@ async function generateRoundTarget(
       targetImageUrl: imageUrl,
       category: room.settings.category,
       phaseEndsAt: room.phaseEndsAt,
-    })
+    });
 
-    return NextResponse.json({ room })
+    return NextResponse.json({ room });
   } catch (err) {
     // Revert to lobby on FLUX failure so the host can retry.
-    room.status = "lobby"
-    room.targetImageUrl = null
-    room.targetPrompt = null
-    room.seed = null
-    room.phaseEndsAt = null
-    await saveRoom(room)
+    room.status = "lobby";
+    room.targetImageUrl = null;
+    room.targetPrompt = null;
+    room.seed = null;
+    room.phaseEndsAt = null;
+    await saveRoom(room);
     await pusher.trigger(`presence-room-${code}`, "round-failed", {
       error: err instanceof Error ? err.message : "round generation failed",
-    })
+    });
     return NextResponse.json(
       {
         error: "round generation failed",
         message: err instanceof Error ? err.message : String(err),
       },
-      { status: 502 }
-    )
+      { status: 502 },
+    );
   }
 }

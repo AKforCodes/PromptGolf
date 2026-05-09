@@ -1,36 +1,41 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Attempt, Player, RoomState } from "@/lib/types";
+import {
+  ApiError,
+  getRoundDetails,
+  pickAttempt,
+  submitGeneration,
+} from "@/lib/api";
+import { tryCatch } from "@/lib/result";
+import { getPusher } from "@/lib/pusher-client";
 import { Button } from "@/components/jklm/button";
 import { Card } from "@/components/jklm/card";
 import { findCategory } from "@/lib/room-constants";
+import { usePhaseCountdown } from "./use-phase-countdown";
 
 interface PlayingViewProps {
   code: string;
   roomState: RoomState;
   userId: string;
-  attempts: Attempt[];
-  submitBusy: boolean;
-  submitError: string | null;
-  onSubmit: (prompt: string) => Promise<boolean>;
-  onClearError: () => void;
   onLeave: () => void;
 }
 
-type LocalPhase = "memorize" | "prompting";
-
 export function PlayingView({
+  code,
   roomState,
   userId,
-  attempts,
-  submitBusy,
-  submitError,
-  onSubmit,
-  onClearError,
   onLeave,
 }: PlayingViewProps) {
-  const { settings, currentRound, players, targetImageUrl, hostId } = roomState;
+  const {
+    settings,
+    currentRound,
+    players,
+    targetImageUrl,
+    hostId,
+    phaseEndsAt,
+  } = roomState;
 
   // Identity gates. Game has started — derive once and reuse.
   const isHost = userId === hostId;
@@ -40,95 +45,151 @@ export function PlayingView({
   const isPrompter = !isHost && meAsNonHost?.role === "prompter";
   const isSpectator = !isHost && meAsNonHost?.role === "spectator";
 
-  const [localPhase, setLocalPhase] = useState<LocalPhase>("memorize");
-  const [secondsLeft, setSecondsLeft] = useState<number>(settings.memorizeTime);
+  // Server-driven countdown. Memorize and prompt are sub-phases of `playing`:
+  // total = memorizeTime + timer. While remaining > timer we're memorizing;
+  // otherwise we're prompting. Auto-advance is handled at the page level.
+  const totalSecondsLeft = usePhaseCountdown(phaseEndsAt);
+  const inMemorize = totalSecondsLeft > settings.timer;
+  const secondsLeft = inMemorize
+    ? Math.max(0, totalSecondsLeft - settings.timer)
+    : totalSecondsLeft;
+  const phaseTotal = inMemorize ? settings.memorizeTime : settings.timer;
+  const barPct = phaseTotal > 0 ? (secondsLeft / phaseTotal) * 100 : 0;
+  const barColor = inMemorize ? "bg-sky" : "bg-golf";
+  const timeOut = !inMemorize && totalSecondsLeft === 0;
+
+  // Local state — round-scoped. PlayingView is keyed on currentRound at the
+  // parent so every round mounts a fresh component; no reset effect needed.
   const [prompt, setPrompt] = useState<string>("");
-  const phaseStartedAtRef = useRef<number>(Date.now());
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [pickedId, setPickedId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState<boolean>(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [pickError, setPickError] = useState<string | null>(null);
+  // userId → count for the player strip. Updated from every attempt-submitted
+  // broadcast (not just the caller's). Caller's own count is also derivable
+  // from `attempts.length` but this map is simpler for the strip render.
+  const [submissionCounts, setSubmissionCounts] = useState<
+    Record<string, number>
+  >({});
 
-  // Reset round-local state when the round number changes.
+  // Initial load: fetch the caller's existing attempts + pick from the round
+  // endpoint. Covers fresh rounds (empty) and refresh mid-round.
   useEffect(() => {
-    setLocalPhase("memorize");
-    setSecondsLeft(settings.memorizeTime);
-    setPrompt("");
-    phaseStartedAtRef.current = Date.now();
-  }, [currentRound, settings.memorizeTime]);
-
-  // Reset the phase clock whenever localPhase changes (memorize → prompting).
-  useEffect(() => {
-    phaseStartedAtRef.current = Date.now();
-    setSecondsLeft(
-      localPhase === "memorize" ? settings.memorizeTime : settings.timer
-    );
-  }, [localPhase, settings.memorizeTime, settings.timer]);
-
-  // Tick the countdown. When memorize hits zero, advance to prompting.
-  useEffect(() => {
-    const total =
-      localPhase === "memorize" ? settings.memorizeTime : settings.timer;
-
-    const interval = setInterval(() => {
-      const elapsed = Math.floor(
-        (Date.now() - phaseStartedAtRef.current) / 1000
-      );
-      const remaining = Math.max(0, total - elapsed);
-      setSecondsLeft(remaining);
-
-      if (remaining === 0 && localPhase === "memorize") {
-        setLocalPhase("prompting");
+    if (currentRound < 1) return;
+    let cancelled = false;
+    void (async () => {
+      const [err, data] = await tryCatch(getRoundDetails(code, currentRound));
+      if (cancelled) return;
+      if (err) {
+        console.error("getRoundDetails failed:", err);
+        return;
       }
-    }, 250);
+      setAttempts(data.myAttempts);
+      setPickedId(data.myPick);
+      // Seed self count from initial fetch — others will be backfilled by
+      // Pusher events as they happen.
+      setSubmissionCounts((prev) => ({
+        ...prev,
+        [userId]: data.myAttempts.length,
+      }));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [code, currentRound, userId]);
 
-    return () => clearInterval(interval);
-  }, [localPhase, settings.memorizeTime, settings.timer]);
+  // Listen for all attempt-submitted broadcasts. Pusher.subscribe is
+  // idempotent — we share the channel with the parent page.
+  useEffect(() => {
+    if (currentRound < 1) return;
+    const pusher = getPusher();
+    const channelName = `presence-room-${code}`;
+    const channel = pusher.subscribe(channelName);
+
+    const onAttempt = (a: Attempt) => {
+      setSubmissionCounts((prev) => ({
+        ...prev,
+        [a.userId]: (prev[a.userId] ?? 0) + 1,
+      }));
+      if (a.userId === userId) {
+        setAttempts((prev) =>
+          prev.some((x) => x.id === a.id) ? prev : [...prev, a]
+        );
+      }
+    };
+
+    channel.bind("attempt-submitted", onAttempt);
+    return () => {
+      channel.unbind("attempt-submitted", onAttempt);
+    };
+  }, [code, currentRound, userId]);
+
+  const usedAttempts = attempts.length;
+  const remainingAttempts = Math.max(
+    0,
+    settings.attemptsPerRound - usedAttempts
+  );
 
   const category = findCategory(settings.category);
   const charCount = prompt.length;
   const charPct = Math.min(100, (charCount / settings.promptMaxLength) * 100);
   const overCap = charCount > settings.promptMaxLength;
-  const timeOut = localPhase === "prompting" && secondsLeft === 0;
-
-  const myAttempts = useMemo(
-    () => attempts.filter((a) => a.userId === userId),
-    [attempts, userId]
-  );
-  const usedCount = myAttempts.length;
-  const attemptsRemaining = settings.attemptsPerRound - usedCount;
-  const atCap = attemptsRemaining <= 0;
-
   const canSubmit =
-    localPhase === "prompting" &&
-    !submitBusy &&
+    !inMemorize &&
     !timeOut &&
-    !atCap &&
+    !submitting &&
     !overCap &&
+    remainingAttempts > 0 &&
     prompt.trim().length > 0 &&
     !isSpectator;
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!canSubmit) return;
-    const ok = await onSubmit(prompt.trim());
-    if (ok) setPrompt("");
-  };
+  const handleSubmit = useCallback(
+    async (e?: React.FormEvent) => {
+      e?.preventDefault();
+      if (!canSubmit) return;
+      setSubmitError(null);
+      setSubmitting(true);
+      const [err, data] = await tryCatch(submitGeneration(code, prompt.trim()));
+      setSubmitting(false);
+      if (err) {
+        setSubmitError(
+          err instanceof ApiError ? err.message : "Submission failed"
+        );
+        return;
+      }
+      // Append directly so the user sees feedback even before the Pusher
+      // event lands; the channel handler dedupes by id.
+      setAttempts((prev) =>
+        prev.some((x) => x.id === data.attempt.id)
+          ? prev
+          : [...prev, data.attempt]
+      );
+      setPrompt("");
+    },
+    [canSubmit, code, prompt]
+  );
+
+  const handlePick = useCallback(
+    async (attemptId: string) => {
+      // Optimistic update; rollback on failure.
+      const prev = pickedId;
+      setPickError(null);
+      setPickedId(attemptId);
+      const [err] = await tryCatch(pickAttempt(code, attemptId));
+      if (err) {
+        setPickedId(prev);
+        setPickError(err instanceof ApiError ? err.message : "Pick failed");
+      }
+    },
+    [code, pickedId]
+  );
 
   // Players strip shows non-host prompters only — they're the ones submitting.
   const submittedPlayers = useMemo<Player[]>(
     () => nonHostPlayers.filter((p) => p.role === "prompter"),
     [nonHostPlayers]
   );
-
-  const totalForBar =
-    localPhase === "memorize" ? settings.memorizeTime : settings.timer;
-  const barPct = (secondsLeft / totalForBar) * 100;
-  const barColor = localPhase === "memorize" ? "bg-sky" : "bg-golf";
-
-  const submissionsByPlayer = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const a of attempts) {
-      map[a.userId] = (map[a.userId] ?? 0) + 1;
-    }
-    return map;
-  }, [attempts]);
 
   return (
     <main className="flex flex-1 flex-col px-4 py-6">
@@ -158,10 +219,10 @@ export function PlayingView({
           <div className="flex items-center justify-between gap-3">
             <span
               className={`rounded-full border-[3px] border-ink px-3 py-0.5 font-heading text-xs font-bold uppercase tracking-wide ${
-                localPhase === "memorize" ? "bg-sky" : "bg-sun"
+                inMemorize ? "bg-sky" : "bg-sun"
               }`}
             >
-              {localPhase === "memorize" ? "Memorize" : "Prompt"}
+              {inMemorize ? "Memorize" : "Prompt"}
             </span>
             <span
               className={`font-heading text-3xl font-bold tabular-nums ${
@@ -184,7 +245,7 @@ export function PlayingView({
         </div>
 
         {/* Phase body */}
-        {localPhase === "memorize" ? (
+        {inMemorize ? (
           <Card className="flex flex-col">
             <div className="mb-3 text-center">
               <h2 className="font-heading text-xl font-bold uppercase tracking-wide">
@@ -215,12 +276,12 @@ export function PlayingView({
         ) : (
           <Card>
             <form onSubmit={handleSubmit} className="flex h-full flex-col">
-              <div className="mb-3 flex items-baseline justify-between">
+              <div className="mb-3 flex items-baseline justify-between gap-3">
                 <h2 className="font-heading text-xl font-bold uppercase tracking-wide">
                   Your Prompt
                 </h2>
                 <span className="rounded-full border-2 border-ink bg-cream px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
-                  {usedCount} / {settings.attemptsPerRound} used
+                  {remainingAttempts} / {settings.attemptsPerRound} left
                 </span>
               </div>
 
@@ -242,11 +303,11 @@ export function PlayingView({
                     value={prompt}
                     onChange={(e) => {
                       setPrompt(e.target.value);
-                      onClearError();
+                      if (submitError) setSubmitError(null);
                     }}
-                    disabled={submitBusy || timeOut || atCap}
+                    disabled={submitting || timeOut || remainingAttempts === 0}
                     placeholder={
-                      atCap
+                      remainingAttempts === 0
                         ? "no attempts remaining"
                         : "e.g. fox in the snow"
                     }
@@ -259,11 +320,16 @@ export function PlayingView({
                     <span className={overCap ? "text-pink" : "text-ink/60"}>
                       {charCount} / {settings.promptMaxLength} chars
                     </span>
-                    <span className="text-ink/60">
-                      {attemptsRemaining > 0
-                        ? `${attemptsRemaining} attempt${attemptsRemaining === 1 ? "" : "s"} left`
-                        : "no attempts left"}
-                    </span>
+                    {timeOut && (
+                      <span className="rounded-full border-2 border-ink bg-pink px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
+                        Time up
+                      </span>
+                    )}
+                    {remainingAttempts === 0 && !timeOut && (
+                      <span className="rounded-full border-2 border-ink bg-sun px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide">
+                        Cap reached
+                      </span>
+                    )}
                   </div>
 
                   <div className="mt-2 h-1 overflow-hidden rounded-full bg-ink/10">
@@ -283,21 +349,21 @@ export function PlayingView({
                     disabled={!canSubmit}
                     className="mt-4"
                   >
-                    {submitBusy
+                    {submitting
                       ? "Generating…"
                       : timeOut
                       ? "Time's up"
-                      : atCap
+                      : remainingAttempts === 0
                       ? "Cap reached"
                       : overCap
                       ? "Too long"
-                      : `Submit (${attemptsRemaining} left)`}
+                      : `Submit (${remainingAttempts} left)`}
                   </Button>
 
                   {submitError && (
                     <p
                       role="alert"
-                      className="mt-3 rounded-xl border-[3px] border-ink bg-pink px-4 py-2 text-center font-heading text-sm font-semibold"
+                      className="mt-3 rounded-xl border-[3px] border-ink bg-pink px-3 py-2 text-center font-heading text-xs font-semibold"
                     >
                       {submitError}
                     </p>
@@ -308,51 +374,81 @@ export function PlayingView({
           </Card>
         )}
 
-        {/* My attempts */}
-        {localPhase === "prompting" && myAttempts.length > 0 && (
-          <Card elevation="sm" className="mt-4 p-4">
-            <h3 className="mb-3 font-heading text-sm font-semibold uppercase tracking-wide text-ink/60">
-              Your attempts this round
-            </h3>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {myAttempts.map((a, idx) => (
-                <div
-                  key={a.id}
-                  className="rounded-2xl border-[3px] border-ink bg-cream p-2 shadow-chunky-sm"
-                >
-                  <div className="aspect-square overflow-hidden rounded-xl border-[3px] border-ink bg-white">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={a.imageUrl}
-                      alt={`Attempt ${idx + 1}`}
-                      className="h-full w-full object-cover"
-                    />
-                  </div>
-                  <div className="mt-2 flex items-center justify-between font-heading text-[10px] font-bold uppercase tracking-wide">
-                    <span>#{idx + 1}</span>
-                    <div className="flex items-center gap-1">
-                      {a.qualified && (
-                        <span className="rounded-full border-2 border-ink bg-golf px-1.5 py-0.5">
-                          ✓
-                        </span>
-                      )}
-                      <span className="rounded-full border-2 border-ink bg-white px-1.5 py-0.5">
-                        {(a.similarity * 100).toFixed(1)}%
-                      </span>
-                      <span className="rounded-full border-2 border-ink bg-white px-1.5 py-0.5">
-                        {a.chars}c
-                      </span>
+        {/* Attempts grid (prompt phase only) */}
+        {!inMemorize && !isSpectator && attempts.length > 0 && (
+          <Card elevation="sm" className="mt-4">
+            <div className="mb-3 flex items-baseline justify-between">
+              <h3 className="font-heading text-sm font-semibold uppercase tracking-wide text-ink/60">
+                Your attempts
+              </h3>
+              <span className="font-heading text-xs text-ink/50">
+                pick one as your final
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+              {attempts.map((a) => {
+                const picked = pickedId === a.id;
+                return (
+                  <div
+                    key={a.id}
+                    className={`flex flex-col overflow-hidden rounded-2xl border-[3px] ${
+                      picked
+                        ? "border-golf bg-golf/10"
+                        : "border-ink bg-white"
+                    }`}
+                  >
+                    <div className="aspect-square overflow-hidden border-b-[3px] border-ink bg-cream">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={a.imageUrl}
+                        alt={a.prompt}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2 p-2">
+                      <p className="line-clamp-2 font-heading text-xs">
+                        {a.prompt}
+                      </p>
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1">
+                          {a.qualified && (
+                            <span className="rounded-full border-2 border-ink bg-golf px-1.5 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
+                              ✓
+                            </span>
+                          )}
+                          <span
+                            className={`rounded-full border-2 border-ink px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide ${
+                              a.qualified ? "bg-golf" : "bg-pink"
+                            }`}
+                          >
+                            {(a.similarity * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <Button
+                          type="button"
+                          variant={picked ? "primary" : "secondary"}
+                          size="sm"
+                          onClick={() => handlePick(a.id)}
+                          disabled={picked}
+                        >
+                          {picked ? "✓ Picked" : "Pick"}
+                        </Button>
+                      </div>
                     </div>
                   </div>
-                  <p
-                    className="mt-1 truncate font-heading text-xs text-ink/70"
-                    title={a.prompt}
-                  >
-                    {a.prompt}
-                  </p>
-                </div>
-              ))}
+                );
+              })}
             </div>
+
+            {pickError && (
+              <p
+                role="alert"
+                className="mt-3 rounded-xl border-[3px] border-ink bg-pink px-3 py-2 text-center font-heading text-xs font-semibold"
+              >
+                {pickError}
+              </p>
+            )}
           </Card>
         )}
 
@@ -363,15 +459,13 @@ export function PlayingView({
               Players
             </h3>
             <span className="font-heading text-xs text-ink/50">
-              {localPhase === "memorize"
-                ? "everyone is memorizing"
-                : "live submissions"}
+              {inMemorize ? "everyone is memorizing" : "live submissions"}
             </span>
           </div>
           <ul className="flex flex-wrap gap-2">
             {submittedPlayers.map((p) => {
               const isYou = p.userId === userId;
-              const submitted = submissionsByPlayer[p.userId] ?? 0;
+              const submitted = submissionCounts[p.userId] ?? 0;
               return (
                 <li
                   key={p.userId}
@@ -382,7 +476,7 @@ export function PlayingView({
                     {isYou && <span className="ml-1 text-ink/50">(you)</span>}
                   </span>
                   <span className="rounded-full bg-cream px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-ink/60">
-                    {localPhase === "memorize"
+                    {inMemorize
                       ? "looking"
                       : `${submitted}/${settings.attemptsPerRound}`}
                   </span>
