@@ -48,11 +48,15 @@ Team of 3 (A backend, B UI, C content). Demo-first. Project context lives in `CL
 - Latency: FLUX gen ~1s, CLIP embed ~0.9s/image. Round-start budget: 1× FLUX (~1s) + 1× CLIP target embed (~0.9s) ≈ 2s, masked by `generating` phase.
 - Per-submission budget: 1× FLUX (~1s) + 1× CLIP candidate embed (~0.9s) + cosine in JS (free) ≈ 2s.
 
-To do here:
-- `/lib/replicate.ts` — `clipEmbed(imageUrl): Promise<number[]>` wrapper around the version-pinned `andreasjansson/clip-features:75b33f25...` model. Take the result of `replicate.run()`, return `output[0].embedding`.
-- `/lib/scoring.ts` — `cosine(a, b)` (pure JS, ~10 lines), `qualifies(sim, threshold)`, `tiebreak(attempts)` for `chars → tokens (chars/4) → similarity → submittedAt`.
+**Shipped 2026-05-09:**
+- `src/lib/replicate.ts` — `clipEmbed(imageUrl): Promise<number[]>`. Lazy singleton `Replicate` client, version-pinned to `75b33f25...`, throws on missing env or unexpected output shape.
+- `src/lib/scoring.ts` — `cosine(a, b)`, `qualifies(sim, threshold)`, `tiebreak<T extends Rankable>(attempts)` implementing `chars → tokens → similarity → submittedAt`.
+- `src/lib/fal.ts` — `falGenerate(prompt, seed): Promise<{imageUrl, seed}>`. FLUX schnell @ 4 steps, square_hd, throws on missing env or empty image array.
+- `src/lib/__tests__/scoring.test.ts` — 13 vitest cases covering identical/parallel/orthogonal/anti-parallel cosine, length-mismatch throw, qualifies edges, all four tiebreak rungs, immutability.
+- `src/app/api/smoke/whoami/` and `src/app/api/smoke/fal/` (SAM-3 path) deleted. `src/app/api/smoke/replicate-clip/` kept until Stage 4 lands.
+
+**Still to do:**
 - `/lib/devBot.ts` — fake player, joins room via API, submits random short prompts. Toggle via `?bot=3`.
-- Delete `src/app/api/smoke/whoami/route.ts` and `src/app/api/smoke/fal/route.ts` (SAM-3 path) once `lib/replicate.ts` lands. Keep `smoke/replicate-clip` until Stage 4 is wired up.
 
 **Originally-planned escalation gate:** if fal CLIP latency >1s or threshold uncalibratable → escalate. Triggered. Resolved by pivoting to Replicate.
 
@@ -90,6 +94,21 @@ To do here:
 ---
 
 ## Stage 4 — Showdown loop (Hr 6–14) — A + B
+
+**Composing primitives.** The scoring/gen building blocks are already shipped (`lib/fal.ts`, `lib/replicate.ts`, `lib/scoring.ts`). The two API routes below are now compositions of existing functions, no new external integration:
+
+```ts
+// /api/round/start
+const { imageUrl: targetImageUrl } = await falGenerate(category.prompt, seed)
+const targetEmbedding = await clipEmbed(targetImageUrl)
+// persist {targetImageUrl, targetEmbedding, seed} on RoomState
+
+// /api/generate
+const { imageUrl: candidateUrl } = await falGenerate(playerPrompt, room.seed)
+const candidateEmbedding = await clipEmbed(candidateUrl)
+const similarity = cosine(room.targetEmbedding, candidateEmbedding)
+const ok = qualifies(similarity, room.settings.threshold ?? 0.88)
+```
 
 **A — server**
 - `/api/round/start` POST `{roomCode}` (host-only):
