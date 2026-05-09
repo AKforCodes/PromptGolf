@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     name,
     avatarSeed,
     role: "prompter",
-    ready: false,
+    ready: true,
     joinedAt: Date.now(),
     connected: true,
     lastSeenAt: Date.now(),

@@ -51,6 +51,7 @@ function RoomLobby({ code }: { code: string }) {
   const [fatalError, setFatalError] = useState<string | null>(null);
 
   const [readyBusy, setReadyBusy] = useState<boolean>(false);
+  const [startError, setStartError] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string>("");
 
   const [joinName, setJoinName] = useState<string>("");
@@ -247,12 +248,18 @@ function RoomLobby({ code }: { code: string }) {
 
   const handleStart = async () => {
     if (!canStart) return;
-    const [err] = await tryCatch(startRoom(code));
+    setStartError(null);
+    const [err, data] = await tryCatch(startRoom(code));
     if (err) {
       console.error("Start failed:", err);
+      setStartError(
+        err instanceof ApiError
+          ? err.message || `Couldn't start (${err.status})`
+          : "Network error"
+      );
       return;
     }
-    void refetchRoom();
+    setRoomState(data.room);
   };
 
   const handleLeave = async () => {
@@ -370,6 +377,14 @@ function RoomLobby({ code }: { code: string }) {
                 ? "Waiting on ready up…"
                 : "Start Round"}
             </Button>
+          )}
+          {startError && (
+            <p
+              role="alert"
+              className="rounded-xl border-[3px] border-ink bg-pink px-4 py-2 text-center font-heading text-sm font-semibold"
+            >
+              {startError}
+            </p>
           )}
           <p className="text-center font-heading text-xs text-ink/50">
             share the room code or link so friends can join
