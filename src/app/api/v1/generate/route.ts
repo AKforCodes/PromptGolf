@@ -70,12 +70,6 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (room.seed == null) {
-    return NextResponse.json(
-      { error: "round target not ready" },
-      { status: 503 },
-    );
-  }
 
   // Per-round attempts cap. Read existing attempts so we can both enforce
   // the cap and append after a successful gen — same Redis read serves both.
@@ -104,9 +98,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Reuse the round's seed so the candidate generation lives in the same
-    // FLUX latent space as the target.
-    const { imageUrl: candidateUrl } = await falGenerate(prompt, room.seed);
+    // No seed passed — FLUX picks a random one per submission. Identical
+    // prompts produce different images, so duplicate-prompt edge cases
+    // can't trivially split votes. Determinism is no longer needed since
+    // CLIP scoring was dropped.
+    const { imageUrl: candidateUrl } = await falGenerate(prompt);
 
     // similarity/qualified are vestigial — kept on the schema for forward-compat
     // in case CLIP scoring is reintroduced. Defaults are 0/false.

@@ -8,9 +8,13 @@ type FluxOutput = {
   seed: number
 }
 
+// `seed` is optional. When omitted, FLUX picks a random seed and returns it in
+// the response — used for player submissions so identical prompts don't produce
+// identical images. Pass an explicit seed when you need reproducibility (e.g.
+// target generation for debugging).
 export async function falGenerate(
   prompt: string,
-  seed: number,
+  seed?: number,
 ): Promise<{ imageUrl: string; seed: number }> {
   if (!process.env.FAL_KEY) {
     throw new Error('FAL_KEY is not set')
@@ -25,7 +29,7 @@ export async function falGenerate(
       fal.subscribe(FLUX_SCHNELL, {
         input: {
           prompt,
-          seed,
+          ...(seed !== undefined ? { seed } : {}),
           num_inference_steps: 4,
           image_size: 'square_hd',
           num_images: 1,
