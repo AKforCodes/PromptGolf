@@ -1,36 +1,88 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Prompt Golf ⛳️
 
-## Getting Started
+Jackbox-style party game where players race to write the **shortest prompt** that recreates a target image. Type prompt → AI generates image → score by similarity to target. Fewest characters wins.
 
-First, run the development server:
+Built at [Hackathon Name] in 24 hours.
+
+## How it works
+
+Join a room with a 4-letter code. Everyone gets the same target image. You have 60 seconds to write a prompt that recreates it. Shortest prompt closest to the target wins the round. Reveal at the end gets laughs.
+
+## Modes
+
+- **Showdown** — All players, same target, race timer, fewest tokens wins. ✅
+- **HoleInOne** — Daily target, async leaderboard. _coming soon_
+- **Whisper** — Telephone with prompts and images. _coming soon_
+
+## Stack
+
+- **Next.js 15** (App Router) + **TypeScript**
+- **Tailwind v4** + **shadcn/ui** for components
+- **Drizzle ORM** + **Neon Postgres** for persistence
+- **Pusher** for realtime room sync
+- **fal.ai** (FLUX schnell) for image generation
+- **Anthropic Claude** for commentary
+- **ElevenLabs** for voice commentary
+- **Howler.js** for sound effects
+- **Framer Motion** for animations
+
+## Getting started
+
+### Prerequisites
+
+- Node.js 20+
+- A Neon Postgres database ([free tier](https://neon.tech))
+- A fal.ai API key ([fal.ai](https://fal.ai))
+- A Pusher app ([pusher.com](https://pusher.com))
+
+### Setup
 
 ```bash
+# install
+npm install
+
+# env vars
+cp .env.example .env.local
+# fill in DATABASE_URL, FAL_KEY, PUSHER_*, etc.
+
+# push schema to db
+npm run db:push
+
+# run
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Scripts
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run dev        # dev server (turbopack)
+npm run build      # production build
+npm run start      # run production build
+npm run lint       # eslint
+npm run db:push    # push drizzle schema to db
+npm run db:studio  # open drizzle studio
+```
 
-## Learn More
+## Architecture
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+src/
+  app/
+    page.tsx                 # landing — create or join room
+    room/[code]/page.tsx     # lobby + game screens
+    api/
+      rooms/                 # create, join, state
+      generate/              # prompt → image + score
+      pusher/auth/           # private channel auth
+  db/
+    schema.ts                # drizzle schema
+  lib/
+    fal.ts                   # image generation
+    scoring.ts               # CLIP similarity
+    pusher.ts                # client + server
+  components/
+    game/                    # game-specific UI
+    ui/                      # shadcn primitives
+```
