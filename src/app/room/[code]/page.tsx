@@ -10,6 +10,7 @@ import {
   getRoom,
   joinRoom,
   leaveRoom,
+  readyRoom,
   seedUser,
   startRoom,
   updateRoomSettings,
@@ -48,7 +49,7 @@ function RoomLobby({ code }: { code: string }) {
   const [phase, setPhase] = useState<Phase>("loading");
   const [fatalError, setFatalError] = useState<string | null>(null);
 
-  const [ready, setReady] = useState<boolean>(false);
+  const [readyBusy, setReadyBusy] = useState<boolean>(false);
   const [shareUrl, setShareUrl] = useState<string>("");
 
   const [joinName, setJoinName] = useState<string>("");
@@ -143,7 +144,9 @@ function RoomLobby({ code }: { code: string }) {
     channel.bind("pusher:member_removed", onChange);
     channel.bind("player-joined", onChange);
     channel.bind("player-left", onChange);
+    channel.bind("player-ready", onChange);
     channel.bind("settings-updated", onChange);
+    channel.bind("round-starting", onChange);
 
     return () => {
       const ch = channelRef.current;
@@ -190,6 +193,8 @@ function RoomLobby({ code }: { code: string }) {
   const allReady =
     nonHostPlayers.length > 0 && nonHostPlayers.every((p) => p.ready);
   const canStart = isHost && allReady && players.length >= 2;
+  const myReady =
+    players.find((p) => p.userId === userId)?.ready ?? false;
 
   const update = <K extends keyof RoomSettings>(
     key: K,
@@ -223,6 +228,20 @@ function RoomLobby({ code }: { code: string }) {
     setLocalSettings(data.room.settings);
     setJoinBusy(false);
     setPhase("ready");
+  };
+
+  const handleReadyToggle = async () => {
+    if (readyBusy) return;
+    setReadyBusy(true);
+    const next = !myReady;
+    const [err, data] = await tryCatch(readyRoom(code, next));
+    if (err) {
+      console.error("Ready toggle failed:", err);
+      setReadyBusy(false);
+      return;
+    }
+    setRoomState(data.room);
+    setReadyBusy(false);
   };
 
   const handleStart = async () => {
@@ -316,12 +335,13 @@ function RoomLobby({ code }: { code: string }) {
         <div className="flex flex-col gap-3">
           {!isHost && (
             <Button
-              variant={ready ? "primary" : "secondary"}
+              variant={myReady ? "primary" : "secondary"}
               size="lg"
               full
-              onClick={() => setReady((r) => !r)}
+              onClick={handleReadyToggle}
+              disabled={readyBusy}
             >
-              {ready ? "✓ Ready" : "Tap to Ready Up"}
+              {myReady ? "✓ Ready" : "Tap to Ready Up"}
             </Button>
           )}
           {isHost && (
