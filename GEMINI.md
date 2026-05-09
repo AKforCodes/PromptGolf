@@ -65,11 +65,12 @@ src/
     page.tsx                       # landing
     room/[code]/page.tsx           # lobby + game (mode-switched)
     room/[code]/spectate/page.tsx  # projector view, read-only
-    api/
+    api/v1/
       rooms/route.ts               # POST create
       rooms/[code]/route.ts        # GET state, POST join/leave
+      user/seed/route.ts           # GET mint user_id cookie
+      pusher/auth/route.ts         # POST presence channel auth
       generate/route.ts            # POST prompt → image_url + CLIP score
-      pusher/auth/route.ts         # presence + private channel auth
       og/[attemptId]/route.ts      # share card PNG
   lib/
     types.ts          # Room, Player, RoundState, Attempt, Scores
@@ -97,67 +98,37 @@ public/
 Defined in `lib/types.ts`. Stored in Redis as JSON strings, all keys 1h TTL.
 
 ```ts
-type Room = {
-  code: string;              // "ABCD"
-  hostId: string;            // playerId of current host
-  status: "lobby" | "generating" | "countdown" | "playing" | "reveal" | "ended";
-  players: Player[];         // inline; ordered by joinedAt
-  settings: {
-    gameMode: "showdown";
-    maxPlayers: number;      // 1–8, default 8
-    categories: string[];    // host-picked category ids from data/categories.json
-    totalRounds: number;     // 1–5, default 3
-    roundDurationMs: number; // 30000–120000, default 60000
-    promptMaxLength: number; // 50–200, default 200
-    threshold: number;       // 0.78 — qualifying CLIP score
-    disconnectGraceMs: number; // 30000
-  };
-  currentRound: number;      // 0 in lobby, 1+ in play
-  round: RoundState | null;  // null in lobby, populated when round active
-  createdAt: number;
-  version: number;           // increments on every write — client reconciliation
+// src/lib/types.ts — source of truth
+type RoomSettings = {
+  gameMode: "showdown";
+  rounds: number;           // 1–5, default 3
+  maxPlayers: number;       // 1–8, default 8
+  timer: number;            // 30–120s, default 60
+  promptMaxLength: number;  // 50–200, default 200
+  category: "animals" | "landmarks" | "food" | "celebrity" | "logos";
 };
 
 type Player = {
-  userId: string;            // from httpOnly cookie, crypto.randomUUID()
+  userId: string;           // from httpOnly cookie, crypto.randomUUID()
   name: string;
-  avatarSeed: string;        // DiceBear seed
+  avatarSeed: string;       // DiceBear seed
   role: "prompter" | "spectator";
   ready: boolean;
-  joinedAt: number;          // host succession order
-  connected: boolean;        // Pusher presence-driven
-  lastSeenAt: number;        // for 30s grace + idle GC
+  joinedAt: number;         // host succession order
+  connected: boolean;       // Pusher presence-driven
+  lastSeenAt: number;       // for 30s grace + idle GC
 };
 
-type RoundState = {
-  number: number;
-  category: string;          // chosen category id for this round
-  targetImageUrl: string;    // public URL, safe to broadcast
-  targetPrompt: string;      // SECRET — server-only until reveal payload
-  seed: number;              // FLUX seed for this round
-  startedAt: number;         // playing phase start
-  endsAt: number;            // startedAt + roundDurationMs
-};
-
-type Attempt = {
-  id: string;                // nanoid, used in /api/og/[id]
-  playerId: string;
-  playerName: string;        // denormalized for cheap reveal render
-  prompt: string;
-  imageUrl: string;          // fal-returned
-  similarity: number;        // raw CLIP 0–1
-  qualified: boolean;        // similarity >= threshold
-  chars: number;
-  tokens: number;            // Math.ceil(prompt.length / 4)
-  submittedAt: number;
-};
-
-type Scores = {
-  [playerId: string]: {
-    totalChars: number;        // golf-style cumulative, lower is better
-    qualifiedRounds: number;
-    dnfRounds: number;
-  };
+type RoomState = {
+  code: string;             // "ABCD"
+  hostId: string;           // userId of current host
+  settings: RoomSettings;
+  players: Player[];        // inline; ordered by joinedAt
+  status: "lobby" | "countdown" | "playing" | "reveal" | "ended";
+  currentRound: number;     // 0 in lobby, 1+ in play
+  targetId: string | null;  // current round target image id
+  seed: number | null;      // FLUX seed for current round
+  createdAt: number;
 };
 ```
 
@@ -165,31 +136,87 @@ type Scores = {
 
 | Key | Type | Value | TTL |
 |---|---|---|---|
-| `room:{CODE}` | string (JSON) | `Room` | 1h |
-| `room:{CODE}:attempts:{round}` | string (JSON) | `Attempt[]` (read → push → write) | 1h |
-| `room:{CODE}:scores` | string (JSON) | `Scores` (updated only at round end) | 1h |
-| `cache:fal:{seedhash}` | string | image url, optional hot-prompt cache | 5m |
-
-### What does NOT live in Redis
-
-- Category metadata (`data/categories.json`) and sound assets — bundled, faster than Redis.
-- fal API responses long-term — only ephemeral 5m cache by seed hash.
-- Player session — cookie holds `playerId`, validated against the room's `players[]` on each request.
+| `room:{CODE}` | string (JSON) | `RoomState` | 1h |
 
 ### Why this shape
 
-- **`players[]` inline on Room:** lobbies are ≤8 and we always read the full roster anyway. One read instead of N. Tradeoff: every player update rewrites the room — fine, players don't update often.
-- **`ready` on Player:** "is everyone ready?" is `players.every(p => p.ready)`, no extra key.
-- **`round` nullable:** clean separation between lobby and active play. When `status === 'playing'`, `room.round` has everything you need.
-- **`targetPrompt` server-only:** treat like a DB secret. Strip it from every API response and Pusher event until the reveal payload at round end.
-- **`version`:** every write increments. Clients compare local vs server; gap → refetch full state. Cheap reconciliation hatch.
-- **Attempts in a separate key:** appending on every submission shouldn't rewrite room state. Read at round-end to compute winner, then leave alone.
-- **Scores separate:** updated only at round-end, lets the leaderboard sidebar render between rounds without re-parsing attempts.
+- **`players[]` inline on Room:** lobbies are ≤8 and we always read the full roster anyway. One read instead of N.
+- **`settings` as a single object:** clean encapsulation of room config, validated by zod on every API input.
+- **Role assignment:** first `settings.maxPlayers` joiners get `prompter`, rest get `spectator` — checked in `joinRoom()`.
 
-## Pusher Channels
+## API + Pusher: How real-time works
 
-- `presence-room-{CODE}` — auto-tracks lobby members
-- `private-room-{CODE}-game` — round events, attempts, timer ticks
+Two layers, one purpose:
+
+**REST APIs** (`/api/v1/...`) — mutate state in Redis (create room, join, leave, submit prompt). These are the source of truth. They handle auth via the httpOnly `user_id` cookie and validate with zod.
+
+**Pusher** — broadcasts the result of those mutations to every connected client in real time. Clients never poll — they subscribe once and receive events.
+
+```
+Client A                   Server (Next.js)            Client B
+  │                              │                        │
+  │── POST /api/v1/rooms ──────► │                        │
+  │  (cookie: user_id=abc)       │                        │
+  │                              ├── Redis: createRoom()  │
+  │◄──── { room } ───────────────┤                        │
+  │                              │                        │
+  │── subscribe presence-room-X ─┼───────────────────────►│
+  │  (auto-POSTs /pusher/auth)   │                        │
+  │◄── auth token ───────────────┤                        │
+  │                              │                        │
+  │── POST /api/v1/rooms/X ────► │                        │
+  │  { action: "join" }         │                        │
+  │                              ├── Redis: joinRoom()    │
+  │                              ├── pusher.trigger(      │
+  │                              │   "presence-room-X",   │
+  │                              │   "player-joined",     │
+  │                              │   { userId, name }     │
+  │                              │ )                      │
+  │                              │                        │
+  │                              ├──── "player-joined" ──►│
+  │◄──── { room, role } ─────────┤                        │
+```
+
+### Pusher Auth — the gatekeeper
+
+When a client calls `pusher.subscribe("presence-room-ABCD")`, Pusher.js **automatically** POSTs to `/api/v1/pusher/auth` with `socket_id` and `channel_name`. The server:
+
+1. Reads the httpOnly `user_id` cookie (cannot be faked by client JS)
+2. Extracts room code from the channel name (`presence-room-ABCD` → `ABCD`)
+3. Checks Redis: is this user actually in this room?
+4. If yes, calls `pusher.authorizeChannel()` to sign a token with `{ user_id, user_info: { name, avatarSeed, role } }`
+5. Returns the signed token → Pusher verifies it → client is subscribed
+
+Without this check, anyone could subscribe to any room's channel by guessing the code.
+
+### Presence channel — auto member tracking
+
+`presence-room-{CODE}` is a **Pusher presence channel**. It automatically:
+- Tracks who's connected: `channel.members` is always up to date
+- Fires `pusher:member_added` when someone subscribes
+- Fires `pusher:member_removed` when they disconnect (tab close, network drop)
+- Includes `user_info` (name, avatarSeed, role) with each member
+
+This means the lobby roster updates itself — no custom join/leave events needed for connectivity. The `player-joined` / `player-left` custom events are for the *action* of joining/leaving the room (name change, role assignment), while `pusher:member_added/removed` handles the *WebSocket connection* state.
+
+### When to use each
+
+| Event type | Example | Channel | Who triggers |
+|---|---|---|---|
+| Member connected | Player opened the app | presence (auto) | Pusher |
+| Member disconnected | Tab closed, network lost | presence (auto) | Pusher |
+| Player joined room | Clicked "Join" | presence-room (custom) | Server after API |
+| Player left room | Clicked "Leave" | presence-room (custom) | Server after API |
+| Round starting | Host clicked Start | presence-room (custom) | Server after API |
+| Attempt submitted | Player typed a prompt | presence-room (custom) | Server after API |
+| Timer tick | Every second during play | presence-room (custom) | Server interval |
+
+### Summary
+
+- **Room APIs** = state (Redis). Who is in the room, what round is it, what's the score.
+- **Pusher** = notification. When state changes, tell everyone instantly.
+- **Auth** = security. Only let subscribed users into channels they belong to.
+- **Presence** = auto-connectivity. Pusher tells you when someone's WebSocket drops.
 
 ## Game Flow (Showdown)
 
@@ -221,17 +248,29 @@ Round state machine in Redis: `lobby → generating → countdown(3) → playing
 ## Env Vars
 
 ```bash
+# Redis (Upstash)
 UPSTASH_REDIS_REST_URL=
 UPSTASH_REDIS_REST_TOKEN=
+
+# Image generation (fal.ai)
 FAL_KEY=
+
+# Realtime (Pusher)
 PUSHER_APP_ID=
 PUSHER_SECRET=
 NEXT_PUBLIC_PUSHER_KEY=
 NEXT_PUBLIC_PUSHER_CLUSTER=
+
+# LLM for commentary (optional)
+ANTHROPIC_API_KEY=
+
+# Voice commentary (optional)
+ELEVENLABS_API_KEY=
+ELEVENLABS_VOICE_ID=
+
+# App
 NEXT_PUBLIC_APP_URL=
 ```
-
-No `DATABASE_URL`, no Anthropic, no ElevenLabs — all dropped.
 
 ## Implementation timeline
 
