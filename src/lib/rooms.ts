@@ -34,6 +34,9 @@ export async function createRoom(
     currentRound: 0,
     targetId: null,
     seed: null,
+    targetImageUrl: null,
+    targetPrompt: null,
+    targetEmbedding: null,
     createdAt: Date.now(),
   }
 

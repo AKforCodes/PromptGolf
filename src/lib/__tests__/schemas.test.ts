@@ -49,7 +49,7 @@ describe("RoomSettings", () => {
   })
 
   it("accepts all valid categories", () => {
-    for (const cat of ["animals", "landmarks", "food", "celebrity", "logos"] as const) {
+    for (const cat of ["animals", "landmarks", "foods", "nature", "characters"] as const) {
       expect(() => RoomSettings.parse({ category: cat })).not.toThrow()
     }
   })
@@ -110,7 +110,7 @@ describe("CreateRoomInput", () => {
     const input = {
       name: "Alice",
       avatarSeed: "seed-1",
-      settings: { rounds: 3, maxPlayers: 6, timer: 60, promptMaxLength: 200, category: "food" },
+      settings: { rounds: 3, maxPlayers: 6, timer: 60, promptMaxLength: 200, category: "foods" },
     }
     expect(() => CreateRoomInput.parse(input)).not.toThrow()
   })
