@@ -1,5 +1,6 @@
 import { cookies } from 'next/headers'
 import { NextResponse } from 'next/server'
+import { getEnv } from '@/lib/env'
 
 export async function GET() {
   const cookieStore = await cookies()
@@ -9,7 +10,7 @@ export async function GET() {
     userId = crypto.randomUUID()
     cookieStore.set('user_id', userId, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      secure: getEnv('NODE_ENV', 'development') === 'production',
       sameSite: 'lax',
       path: '/',
       maxAge: 365 * 24 * 60 * 60,

@@ -7,6 +7,7 @@ export const RoomSettings = z.object({
   timer: z.number().int().min(30).max(120).default(60),
   promptMaxLength: z.number().int().min(50).max(200).default(200),
   category: z.enum(["animals", "landmarks", "food", "celebrity", "logos"]).default("animals"),
+  difficulty: z.enum(["easy", "normal", "hard"]).default("normal"),
 })
 
 export type RoomSettings = z.infer<typeof RoomSettings>

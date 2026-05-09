@@ -3,18 +3,15 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { tryCatch } from "@/lib/result";
+import {
+  ApiError,
+  createRoom,
+  joinRoom,
+  seedUser,
+  DEFAULT_ROOM_SETTINGS,
+} from "@/lib/api";
 
 type Mode = "menu" | "join";
-
-const ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ";
-
-function randomCode(): string {
-  let out = "";
-  for (let i = 0; i < 4; i++) {
-    out += ALPHABET[Math.floor(Math.random() * ALPHABET.length)];
-  }
-  return out;
-}
 
 function randomGuestName(): string {
   const n = Math.floor(Math.random() * 99) + 1;
@@ -24,37 +21,73 @@ function randomGuestName(): string {
 export default function Home() {
   const router = useRouter();
   const [name, setName] = useState<string>("");
+  const [userId, setUserId] = useState<string>("");
   const [mode, setMode] = useState<Mode>("menu");
   const [code, setCode] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState<boolean>(false);
 
   useEffect(() => {
     setName(randomGuestName());
     const seed = async () => {
-      const [err] = await tryCatch(fetch("/api/v1/user/seed"));
+      const [err, data] = await tryCatch(seedUser());
       if (err) {
         console.error("Failed to seed user:", err);
+        return;
       }
+      setUserId(data.user_id);
     };
     seed();
   }, []);
 
-  const handleStart = () => {
+  const ensureUserId = async (): Promise<string | null> => {
+    if (userId) return userId;
+    const [err, data] = await tryCatch(seedUser());
+    if (err) {
+      setError("Could not start a session. Try again.");
+      return null;
+    }
+    setUserId(data.user_id);
+    return data.user_id;
+  };
+
+  const handleStart = async () => {
+    if (busy) return;
     if (!name.trim()) {
       setError("Pick a name first");
       return;
     }
-    const newCode = randomCode();
-    router.push(`/room/${newCode}?host=1&name=${encodeURIComponent(name)}`);
+    setError(null);
+    setBusy(true);
+
+    const uid = await ensureUserId();
+    if (!uid) {
+      setBusy(false);
+      return;
+    }
+
+    const [err, data] = await tryCatch(
+      createRoom(name.trim(), uid, DEFAULT_ROOM_SETTINGS)
+    );
+    if (err) {
+      setError(
+        err instanceof ApiError ? `Couldn't create room (${err.status})` : "Network error"
+      );
+      setBusy(false);
+      return;
+    }
+
+    router.push(`/room/${data.room.code}`);
   };
 
-  const handleJoin = () => {
+  const handleJoinClick = () => {
     setError(null);
     setMode("join");
   };
 
-  const handleJoinSubmit = (e: React.FormEvent) => {
+  const handleJoinSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     const cleaned = code.trim().toUpperCase();
     if (cleaned.length !== 4) {
       setError("Room code is 4 letters");
@@ -64,7 +97,29 @@ export default function Home() {
       setError("Pick a name first");
       return;
     }
-    router.push(`/room/${cleaned}?name=${encodeURIComponent(name)}`);
+    setError(null);
+    setBusy(true);
+
+    const uid = await ensureUserId();
+    if (!uid) {
+      setBusy(false);
+      return;
+    }
+
+    const [err] = await tryCatch(joinRoom(cleaned, name.trim(), uid));
+    if (err) {
+      if (err instanceof ApiError && err.status === 404) {
+        setError("Room not found");
+      } else if (err instanceof ApiError) {
+        setError(`Couldn't join (${err.status})`);
+      } else {
+        setError("Network error");
+      }
+      setBusy(false);
+      return;
+    }
+
+    router.push(`/room/${cleaned}`);
   };
 
   return (
@@ -91,7 +146,8 @@ export default function Home() {
               setError(null);
             }}
             maxLength={16}
-            className="w-full rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] px-5 py-4 text-center font-heading text-2xl font-semibold outline-none transition focus:bg-white"
+            disabled={busy}
+            className="w-full rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] px-5 py-4 text-center font-heading text-2xl font-semibold outline-none transition focus:bg-white disabled:opacity-60"
             placeholder="Guest-01"
             aria-label="Player name"
           />
@@ -100,13 +156,15 @@ export default function Home() {
             <div className="mt-6 flex flex-col gap-4">
               <button
                 onClick={handleStart}
-                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer"
+                disabled={busy}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer disabled:cursor-wait disabled:opacity-70"
               >
-                Start Game
+                {busy ? "Creating…" : "Start Game"}
               </button>
               <button
-                onClick={handleJoin}
-                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FACC15] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer"
+                onClick={handleJoinClick}
+                disabled={busy}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FACC15] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer disabled:cursor-not-allowed disabled:opacity-70"
               >
                 Join Game
               </button>
@@ -119,7 +177,12 @@ export default function Home() {
               <input
                 value={code}
                 onChange={(e) => {
-                  setCode(e.target.value.toUpperCase().replace(/[^A-Z]/g, "").slice(0, 4));
+                  setCode(
+                    e.target.value
+                      .toUpperCase()
+                      .replace(/[^A-Z0-9]/g, "")
+                      .slice(0, 4)
+                  );
                   setError(null);
                 }}
                 autoFocus
@@ -127,15 +190,17 @@ export default function Home() {
                 inputMode="text"
                 autoCapitalize="characters"
                 spellCheck={false}
-                className="w-full rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] px-5 py-4 text-center font-heading text-4xl font-bold uppercase tracking-[0.5em] outline-none transition focus:bg-white"
+                disabled={busy}
+                className="w-full rounded-2xl border-[3px] border-[#0A0A0A] bg-[#FFF8E7] px-5 py-4 text-center font-heading text-4xl font-bold uppercase tracking-[0.5em] outline-none transition focus:bg-white disabled:opacity-60"
                 placeholder="ABCD"
                 aria-label="Room code"
               />
               <button
                 type="submit"
-                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer"
+                disabled={busy}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-[#22C55E] py-5 font-heading text-2xl font-bold uppercase tracking-wide text-[#0A0A0A] shadow-chunky cursor-pointer disabled:cursor-wait disabled:opacity-70"
               >
-                Enter Room
+                {busy ? "Joining…" : "Enter Room"}
               </button>
               <button
                 type="button"
@@ -144,7 +209,8 @@ export default function Home() {
                   setCode("");
                   setError(null);
                 }}
-                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-white py-3 font-heading text-base font-semibold uppercase tracking-wide text-[#0A0A0A] shadow-chunky-sm cursor-pointer"
+                disabled={busy}
+                className="press rounded-2xl border-[3px] border-[#0A0A0A] bg-white py-3 font-heading text-base font-semibold uppercase tracking-wide text-[#0A0A0A] shadow-chunky-sm cursor-pointer disabled:cursor-not-allowed"
               >
                 Back
               </button>
