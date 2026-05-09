@@ -37,18 +37,18 @@ export async function createRoom(
     createdAt: Date.now(),
   }
 
-  await redis.set(roomKey(code), JSON.stringify(room), { ex: ROOM_TTL })
+  await redis.set(roomKey(code), room, { ex: ROOM_TTL })
   return room
 }
 
 export async function getRoom(code: string): Promise<RoomState | null> {
   const data = await redis.get(roomKey(code))
   if (!data) return null
-  return JSON.parse(data as string) as RoomState
+  return data as RoomState
 }
 
 export async function saveRoom(room: RoomState): Promise<void> {
-  await redis.set(roomKey(room.code), JSON.stringify(room), { ex: ROOM_TTL })
+  await redis.set(roomKey(room.code), room, { ex: ROOM_TTL })
 }
 
 export async function joinRoom(
