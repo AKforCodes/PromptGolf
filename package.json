@@ -6,11 +6,13 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "gen:targets": "tsx src/app/_scripts/generate-targets.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.95.1",
     "@fal-ai/client": "^1.10.1",
+    "@google-cloud/vertexai": "^1.12.0",
     "@upstash/redis": "^1.38.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
@@ -42,6 +44,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.2.6",
     "tailwindcss": "^4",
+    "tsx": "^4.19.2",
     "typescript": "^5"
   }
 }
