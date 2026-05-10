@@ -26,6 +26,7 @@ Jackbox-style party game. Players see a target image, race to write prompts that
 | Realtime | Pusher (presence + private channels, pub/sub) |
 | Role assignment | First N joiners = prompter, rest = spectator (host can swap) |
 | Voice commentary | DROPPED — spectator + share card win the hour |
+| Voice prompting | ElevenLabs Scribe v2 (one-shot batch, not streaming). Push-to-talk: hold mic button → record up to 25s → release → POST multipart to `/api/v1/transcribe` → text lands in prompt input. Player edits and submits manually. Mic permission requested in lobby via `MicPermissionButton` before game starts. |
 | Anti-cheese | Prompt max length cap, 3s resubmit debounce, target prompt never sent to client |
 | Demo first | Every decision biases toward live-on-stage moment |
 
@@ -37,6 +38,7 @@ Jackbox-style party game. Players see a target image, race to write prompts that
 - Realtime: Pusher Channels
 - Image gen: fal.ai FLUX schnell
 - Scoring: pure player voting (no CLIP — dropped 2026-05-09)
+- Voice prompting: ElevenLabs Scribe v2 (speech-to-text, push-to-talk)
 - Animation: Framer Motion
 - Sound: Howler.js
 - Avatars: DiceBear API (URL-only)
@@ -87,7 +89,8 @@ src/
     devBot.ts         # fake player for testing
   components/
     game/             # PromptInput, AttemptCard, Leaderboard, RevealScreen
-    lobby/            # PlayerList, AvatarPicker, RoomCode, CategoryPicker
+    lobby/            # PlayerList, AvatarPicker, RoomCode, CategoryPicker, MicPermissionButton
+    play/             # PlayingView, MicButton, usePushToTalk (push-to-talk hook)
     spectator/        # BigScreen, JoinQR
     ui/               # shadcn primitives
   data/

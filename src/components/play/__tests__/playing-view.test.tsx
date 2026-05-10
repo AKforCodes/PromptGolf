@@ -15,7 +15,7 @@ function deriveLobbyGates(
   const allReady =
     nonHostPrompters.length > 0 &&
     nonHostPrompters.every((p) => p.ready)
-  const canStart = isHost && allReady && players.length >= 2
+  const canStart = isHost && allReady && players.length >= 3
   const canReady = !isHost && !isSpectator
   return { myRole, isHost, isSpectator, nonHostPrompters, allReady, canStart, canReady }
 }
