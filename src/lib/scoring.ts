@@ -60,10 +60,31 @@ export function selectFinalAttempts<T extends PickableAttempt>(
   return finals
 }
 
+// Each vote on a player's image awards them POINTS_PER_VOTE.
+export const POINTS_PER_VOTE = 10
+
+// Returns the userIds tied for the highest score, restricted to `eligible`.
+// Returns [] if eligible is empty or every eligible player has score 0.
+// Used at end-of-round to detect ties:
+//   - main rounds done with 2+ tied → enter tiebreaker
+//   - tiebreaker round done with 2+ still tied → another tiebreaker
+//   - exactly 1 → that player wins, game ends
+export function findTopTiedPlayers(
+  scores: Record<string, number>,
+  eligible: readonly string[]
+): string[] {
+  if (eligible.length === 0) return []
+  const list = eligible.map((uid) => ({ uid, score: scores[uid] ?? 0 }))
+  const max = Math.max(0, ...list.map((s) => s.score))
+  if (max === 0) return []
+  return list.filter((s) => s.score === max).map((s) => s.uid)
+}
+
 // Award per-round vote counts into the cumulative scores map.
-// Each player has exactly one vote per round; each vote = 1 point to that target.
-// `finalAttempts` is unused for scoring but retained in the signature so callers
-// don't need to rewire if the scoring rule grows back later.
+// Each player has exactly one vote per round; each vote = POINTS_PER_VOTE
+// points to that target. `finalAttempts` is unused for scoring but retained
+// in the signature so callers don't need to rewire if the scoring rule grows
+// back later.
 // Pure: returns a new object.
 export function awardRoundScores<A extends { userId: string }, V extends ScorableVote>(
   currentScores: Record<string, number>,
@@ -72,7 +93,7 @@ export function awardRoundScores<A extends { userId: string }, V extends Scorabl
 ): Record<string, number> {
   const next = { ...currentScores }
   for (const v of votes) {
-    next[v.targetId] = (next[v.targetId] ?? 0) + 1
+    next[v.targetId] = (next[v.targetId] ?? 0) + POINTS_PER_VOTE
   }
   return next
 }

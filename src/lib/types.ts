@@ -74,6 +74,11 @@ export const RoomState = z.object({
   // a countdown to this value and auto-fire `advance` when it elapses.
   // Null in `lobby` and `ended`; null transiently while `generating`.
   phaseEndsAt: z.number().nullable().default(null),
+  // When non-null, the game is in tiebreaker mode and only these userIds
+  // may submit/be voted on. Set after the final main round if 2+ players
+  // are tied for the lead. Narrows on each tiebreaker round until exactly
+  // one player remains, at which point the game ends.
+  tiebreakerPlayers: z.array(z.string()).nullable().default(null),
   createdAt: z.number(),
 })
 

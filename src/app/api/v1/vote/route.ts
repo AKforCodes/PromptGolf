@@ -45,6 +45,16 @@ export async function POST(request: Request) {
   if (!room.players.some((p) => p.userId === targetUserId)) {
     return NextResponse.json({ error: "target not in room" }, { status: 400 })
   }
+  // During a tiebreaker, only tied players' attempts are votable.
+  if (
+    room.tiebreakerPlayers != null &&
+    !room.tiebreakerPlayers.includes(targetUserId)
+  ) {
+    return NextResponse.json(
+      { error: "tiebreaker round — only tied players may receive votes" },
+      { status: 400 },
+    )
+  }
   if (room.status !== "voting") {
     return NextResponse.json({ error: "voting is not active" }, { status: 409 })
   }
