@@ -256,6 +256,7 @@ function RoomLobby({ code }: { code: string }) {
     }
 
     const timer = setTimeout(async () => {
+
       const [err] = await tryCatch(updateRoomSettings(code, localSettings));
       if (err) {
         console.error("Failed to sync settings:", err);
