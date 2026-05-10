@@ -26,6 +26,10 @@ const VOTING_DURATION_MS = 10_000;
 const REVEAL_DURATION_MS = 15_000;
 const TIEBREAKER_INTRO_DURATION_MS = 6_000;
 const GAME_INTRO_DURATION_MS = 6_000;
+// Hard cap on tiebreaker rounds — if the same set keeps tying for this many
+// rounds we declare them all co-winners and end the game. Prevents an
+// infinite stalemate when nobody votes.
+const MAX_TIEBREAKER_ROUNDS = 5;
 
 const JoinAction = z.object({
   action: z.literal("join"),
@@ -209,9 +213,10 @@ export async function POST(
     const nonHostPrompters = room.players.filter(
       (p) => p.userId !== room.hostId && p.role === "prompter",
     );
-    if (nonHostPrompters.length < 1) {
+    // Minimum 3 players total (host + 2 non-host prompters).
+    if (room.players.length < 3 || nonHostPrompters.length < 2) {
       return NextResponse.json(
-        { error: "need at least 1 prompter" },
+        { error: "need at least 3 players to start" },
         { status: 400 },
       );
     }
@@ -318,6 +323,31 @@ export async function POST(
       // already in a tiebreaker. Otherwise just continue main rounds.
       if (finalRoundReached || room.tiebreakerPlayers != null) {
         const topTied = findTopTiedPlayers(room.scores, eligible);
+
+        // Hard stalemate cap: if we've burned through MAX_TIEBREAKER_ROUNDS
+        // without resolving, declare everyone in the current tied pool a
+        // co-winner and end the game. Prevents infinite-loop stalemates.
+        const tiebreakerRoundsPlayed = room.tiebreakerPlayers
+          ? room.currentRound - room.settings.rounds
+          : 0;
+        if (
+          room.tiebreakerPlayers != null &&
+          tiebreakerRoundsPlayed >= MAX_TIEBREAKER_ROUNDS &&
+          topTied.length > 1
+        ) {
+          room.status = "ended";
+          room.phaseEndsAt = null;
+          // Keep tiebreakerPlayers populated so the EndedView can label
+          // them as shared winners.
+          await saveRoom(room);
+          await pusher.trigger(`presence-room-${code}`, "game-ended", {
+            status: "ended",
+            scores: room.scores,
+            coWinners: topTied,
+            reason: "tiebreaker-stalemate",
+          });
+          return NextResponse.json({ room });
+        }
 
         if (topTied.length <= 1) {
           // Single leader (or nobody scored) → end the game.

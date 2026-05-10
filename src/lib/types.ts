@@ -3,7 +3,7 @@ import { z } from "zod"
 export const RoomSettings = z.object({
   gameMode: z.enum(["showdown"]).default("showdown"),
   rounds: z.number().int().min(1).max(5).default(3),
-  maxPlayers: z.number().int().min(1).max(8).default(8),
+  maxPlayers: z.number().int().min(3).max(8).default(8),
   timer: z.number().int().min(30).max(120).default(60),
   // How long the target image is shown before it disappears and prompting begins.
   memorizeTime: z.number().int().min(5).max(30).default(10),
