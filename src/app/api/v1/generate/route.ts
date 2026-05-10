@@ -121,6 +121,9 @@ export async function POST(request: Request) {
 
     const attempts = [...existing, attempt];
     await redis.set(key, attempts, { ex: ATTEMPT_TTL });
+    if (process.env.NODE_ENV === "development") {
+      console.log(`[generate] saved attempt id=${attempt.id} userId=${userId} round=${room.currentRound} key=${key} total=${attempts.length}`);
+    }
 
     await pusher.trigger(
       `presence-room-${roomCode}`,

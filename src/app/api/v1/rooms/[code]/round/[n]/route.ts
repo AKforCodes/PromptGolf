@@ -55,6 +55,9 @@ export async function GET(
   const attempts =
     ((await redis.get(`room:${code}:attempts:${round}`)) as Attempt[] | null) ??
     [];
+  if (process.env.NODE_ENV === "development") {
+    console.log(`[round/${round}] attempts count = ${attempts.length}, userId=${userId}, myAttempts=${attempts.filter((a) => a.userId === userId).length}`);
+  }
   const votes =
     ((await redis.get(`room:${code}:votes:${round}`)) as Vote[] | null) ?? [];
 

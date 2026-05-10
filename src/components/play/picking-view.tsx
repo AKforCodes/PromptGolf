@@ -39,6 +39,8 @@ export function PickingView({
   const [pickBusy, setPickBusy] = useState<boolean>(false);
 
   // Initial fetch — myAttempts + current pick.
+  // Retries once after 1.5s if the result is empty, as a safety net against
+  // a brief Redis read-after-write inconsistency.
   useEffect(() => {
     if (currentRound < 1) return;
     let cancelled = false;
@@ -49,6 +51,19 @@ export function PickingView({
         console.error("getRoundDetails failed:", err);
         setLoading(false);
         return;
+      }
+      if (data.myAttempts.length === 0) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (cancelled) return;
+        const [retryErr, retryData] = await tryCatch(getRoundDetails(code, currentRound));
+        if (retryErr) {
+          console.error("getRoundDetails retry failed:", retryErr);
+        } else {
+          setMyAttempts(retryData.myAttempts);
+          setPickedId(retryData.myPick);
+          setLoading(false);
+          return;
+        }
       }
       setMyAttempts(data.myAttempts);
       setPickedId(data.myPick);
