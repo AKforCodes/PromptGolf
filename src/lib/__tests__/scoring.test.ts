@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   tiebreak,
   awardRoundScores,
+  findTopTiedPlayers,
   selectFinalAttempts,
 } from "../scoring"
 
@@ -103,7 +104,7 @@ describe("selectFinalAttempts", () => {
 })
 
 describe("awardRoundScores", () => {
-  it("awards 1 point per vote received", () => {
+  it("awards 10 points per vote received", () => {
     const next = awardRoundScores(
       {},
       [],
@@ -113,7 +114,7 @@ describe("awardRoundScores", () => {
         { targetId: "alice" },
       ]
     )
-    expect(next).toEqual({ alice: 3 })
+    expect(next).toEqual({ alice: 30 })
   })
 
   it("counts votes for multiple targets independently", () => {
@@ -122,7 +123,7 @@ describe("awardRoundScores", () => {
       { targetId: "alice" },
       { targetId: "bob" },
     ])
-    expect(next).toEqual({ alice: 2, bob: 1 })
+    expect(next).toEqual({ alice: 20, bob: 10 })
   })
 
   it("accumulates onto existing scores across rounds", () => {
@@ -135,19 +136,19 @@ describe("awardRoundScores", () => {
       { targetId: "bob" },
       { targetId: "bob" },
     ])
-    expect(round2).toEqual({ alice: 3, bob: 2 })
+    expect(round2).toEqual({ alice: 30, bob: 20 })
   })
 
   it("does not mutate the input scores", () => {
-    const before = { alice: 5 }
+    const before = { alice: 50 }
     const snapshot = { ...before }
     awardRoundScores(before, [], [{ targetId: "alice" }])
     expect(before).toEqual(snapshot)
   })
 
   it("votes default to empty when omitted", () => {
-    const next = awardRoundScores({ alice: 2 }, [])
-    expect(next).toEqual({ alice: 2 })
+    const next = awardRoundScores({ alice: 20 }, [])
+    expect(next).toEqual({ alice: 20 })
   })
 
   it("ignores finalAttempts (vestigial — kept in signature for forward-compat)", () => {
@@ -156,7 +157,49 @@ describe("awardRoundScores", () => {
       [{ userId: "alice" }, { userId: "bob" }],
       [{ targetId: "alice" }]
     )
-    expect(next).toEqual({ alice: 1 })
+    expect(next).toEqual({ alice: 10 })
     expect(next.bob).toBeUndefined()
+  })
+})
+
+describe("findTopTiedPlayers", () => {
+  it("returns the single leader when there is no tie", () => {
+    const tied = findTopTiedPlayers(
+      { alice: 30, bob: 20, carol: 10 },
+      ["alice", "bob", "carol"]
+    )
+    expect(tied).toEqual(["alice"])
+  })
+
+  it("returns all players tied for the top score", () => {
+    const tied = findTopTiedPlayers(
+      { alice: 30, bob: 30, carol: 10 },
+      ["alice", "bob", "carol"]
+    )
+    expect(tied.sort()).toEqual(["alice", "bob"])
+  })
+
+  it("ignores players outside the eligible set", () => {
+    const tied = findTopTiedPlayers(
+      { alice: 30, bob: 30, carol: 50 },
+      ["alice", "bob"]
+    )
+    expect(tied.sort()).toEqual(["alice", "bob"])
+  })
+
+  it("returns [] when nobody scored", () => {
+    expect(findTopTiedPlayers({}, ["alice", "bob"])).toEqual([])
+    expect(
+      findTopTiedPlayers({ alice: 0, bob: 0 }, ["alice", "bob"])
+    ).toEqual([])
+  })
+
+  it("returns [] when eligible is empty", () => {
+    expect(findTopTiedPlayers({ alice: 30 }, [])).toEqual([])
+  })
+
+  it("treats missing scores as 0", () => {
+    const tied = findTopTiedPlayers({ alice: 10 }, ["alice", "bob"])
+    expect(tied).toEqual(["alice"])
   })
 })

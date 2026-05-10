@@ -14,7 +14,11 @@ import {
 } from "@/lib/rooms";
 import { getCategoryPrompt } from "@/lib/targets";
 import { falGenerate } from "@/lib/fal";
-import { awardRoundScores, selectFinalAttempts } from "@/lib/scoring";
+import {
+  awardRoundScores,
+  findTopTiedPlayers,
+  selectFinalAttempts,
+} from "@/lib/scoring";
 
 // Phase durations (ms). `playing` uses room.settings.timer (host-configurable).
 const PICKING_DURATION_MS = 10_000;
@@ -290,17 +294,40 @@ export async function POST(
     }
 
     if (room.status === "reveal") {
-      // reveal → next round, OR ended if last round
-      if (room.currentRound >= room.settings.rounds) {
-        room.status = "ended";
-        room.phaseEndsAt = null;
-        await saveRoom(room);
-        await pusher.trigger(`presence-room-${code}`, "game-ended", {
-          status: "ended",
-          scores: room.scores,
-        });
-        return NextResponse.json({ room });
+      // reveal → next round, tiebreaker, OR ended.
+      const allPrompters = room.players
+        .filter((p) => p.role === "prompter")
+        .map((p) => p.userId);
+
+      // Eligible for the next tie check: if already in tiebreaker, narrow to
+      // the current tiebreakerPlayers; otherwise consider every prompter.
+      const eligible = room.tiebreakerPlayers ?? allPrompters;
+      const finalRoundReached = room.currentRound >= room.settings.rounds;
+
+      // Trigger tiebreaker when the configured rounds are done OR we're
+      // already in a tiebreaker. Otherwise just continue main rounds.
+      if (finalRoundReached || room.tiebreakerPlayers != null) {
+        const topTied = findTopTiedPlayers(room.scores, eligible);
+
+        if (topTied.length <= 1) {
+          // Single leader (or nobody scored) → end the game.
+          room.status = "ended";
+          room.phaseEndsAt = null;
+          room.tiebreakerPlayers = null;
+          await saveRoom(room);
+          await pusher.trigger(`presence-room-${code}`, "game-ended", {
+            status: "ended",
+            scores: room.scores,
+          });
+          return NextResponse.json({ room });
+        }
+
+        // 2+ tied → run another tiebreaker round narrowed to those players.
+        room.tiebreakerPlayers = topTied;
+        return generateRoundTarget(room, code);
       }
+
+      // Normal main-round progression.
       return generateRoundTarget(room, code);
     }
 

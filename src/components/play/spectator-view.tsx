@@ -27,14 +27,13 @@ export function SpectatorView({
   const secondsLeft = usePhaseCountdown(roomState.phaseEndsAt);
   const category = findCategory(settings.category);
 
-  // Prompters spectators can browse — non-hosts only.
+  // Prompters spectators can browse — host is included since they also play.
   const prompters = useMemo(
-    () =>
-      players.filter(
-        (p) => p.userId !== hostId && p.role === "prompter"
-      ),
-    [players, hostId]
+    () => players.filter((p) => p.role === "prompter"),
+    [players]
   );
+  // hostId still extracted for parity with other views; not used for filtering.
+  void hostId;
 
   const [selectedIdx, setSelectedIdx] = useState<number>(0);
   const [attemptsByUser, setAttemptsByUser] = useState<

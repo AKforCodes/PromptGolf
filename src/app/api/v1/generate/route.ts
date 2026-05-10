@@ -51,6 +51,16 @@ export async function POST(request: Request) {
   if (!room.players.some((p) => p.userId === userId)) {
     return NextResponse.json({ error: "not in room" }, { status: 403 });
   }
+  // During a tiebreaker, only the still-tied players can submit attempts.
+  if (
+    room.tiebreakerPlayers != null &&
+    !room.tiebreakerPlayers.includes(userId)
+  ) {
+    return NextResponse.json(
+      { error: "tiebreaker round — only tied players may submit" },
+      { status: 403 },
+    );
+  }
   if (room.status !== "playing") {
     return NextResponse.json({ error: "round is not active" }, { status: 409 });
   }
@@ -130,8 +140,14 @@ export async function POST(request: Request) {
 
     // Early advance: if every prompter has used all their attempts, skip the
     // remaining round-timer wait and flip straight to the picking phase.
+    // During tiebreaker only the tied players are "active" — that's the
+    // population we check for "everyone maxed". Otherwise: all prompters.
+    const activeIds = room.tiebreakerPlayers ?? null;
     const prompters = room.players.filter(
-      (p) => p.userId !== room.hostId && p.role === "prompter",
+      (p) =>
+        p.userId !== room.hostId &&
+        p.role === "prompter" &&
+        (activeIds ? activeIds.includes(p.userId) : true),
     );
     const everyoneMaxed =
       prompters.length > 0 &&

@@ -262,6 +262,12 @@ function RoomLobby({ code }: { code: string }) {
   const myRole =
     players.find((p) => p.userId === userId)?.role ?? null;
   const isSpectator = myRole === "spectator";
+  // During a tiebreaker, prompters who didn't qualify watch instead of play.
+  const isEliminatedFromTiebreaker = Boolean(
+    roomState?.tiebreakerPlayers &&
+      !roomState.tiebreakerPlayers.includes(userId) &&
+      myRole === "prompter",
+  );
   const nonHostPrompters = roomState
     ? players.filter(
         (p) => p.userId !== roomState.hostId && p.role === "prompter",
@@ -401,7 +407,7 @@ function RoomLobby({ code }: { code: string }) {
   }
 
   if (roomState.status === "playing" || roomState.status === "countdown") {
-    if (isSpectator) {
+    if (isSpectator || isEliminatedFromTiebreaker) {
       return (
         <SpectatorView
           key={roomState.currentRound}

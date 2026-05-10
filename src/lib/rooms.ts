@@ -39,6 +39,7 @@ export async function createRoom(
     scores: {},
     picks: {},
     phaseEndsAt: null,
+    tiebreakerPlayers: null,
     createdAt: Date.now(),
   }
 
