@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Attempt, RoomState, Vote } from "@/lib/types";
-import { ApiError, getRoundDetails, submitVote } from "@/lib/api";
+import { ApiError, getRoundDetails, restartRoom, submitVote } from "@/lib/api";
 import { tryCatch } from "@/lib/result";
 import { getPusher } from "@/lib/pusher-client";
 import { Button } from "@/components/jklm/button";
@@ -13,6 +13,7 @@ interface PhaseProps {
   roomState: RoomState;
   userId: string;
   onLeave: () => void;
+  code?: string;
 }
 
 interface VotingPhaseProps extends PhaseProps {
@@ -347,7 +348,24 @@ export function RevealView({ roomState, userId, onLeave }: PhaseProps) {
   );
 }
 
-export function EndedView({ roomState, userId, onLeave }: PhaseProps) {
+export function EndedView({ roomState, userId, onLeave, code }: PhaseProps) {
+  const isHost = roomState.hostId === userId;
+  const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+
+  const handleRestart = async () => {
+    if (!code || restarting) return;
+    setRestarting(true);
+    setRestartError(null);
+    const [err] = await tryCatch(restartRoom(code));
+    setRestarting(false);
+    if (err) {
+      setRestartError(err instanceof ApiError ? err.message : "Failed to restart");
+    }
+    // On success the server broadcasts `game-restarted`; the parent page
+    // re-fetches room state and switches back to the lobby view.
+  };
+
   return (
     <main className="flex flex-1 flex-col px-4 py-6">
       <div className="mx-auto w-full max-w-3xl">
@@ -376,9 +394,32 @@ export function EndedView({ roomState, userId, onLeave }: PhaseProps) {
           <ScoreList scores={roomState.scores} players={roomState.players} />
         </Card>
 
-        <Button variant="primary" size="lg" full onClick={onLeave}>
-          Back to start
-        </Button>
+        <div className="flex flex-col gap-3">
+          {isHost && code && (
+            <Button
+              variant="primary"
+              size="lg"
+              full
+              onClick={handleRestart}
+              disabled={restarting}
+            >
+              {restarting ? "Restarting…" : "Play Again"}
+            </Button>
+          )}
+          {!isHost && (
+            <p className="text-center font-heading text-sm text-ink/60">
+              Waiting for host to start a new game…
+            </p>
+          )}
+          {restartError && (
+            <p className="rounded-xl border-[3px] border-ink bg-pink px-3 py-2 text-center font-heading text-xs font-semibold">
+              {restartError}
+            </p>
+          )}
+          <Button variant="neutral" size="lg" full onClick={onLeave}>
+            Leave
+          </Button>
+        </div>
       </div>
     </main>
   );

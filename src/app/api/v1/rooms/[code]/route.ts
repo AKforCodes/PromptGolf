@@ -67,6 +67,10 @@ const PickAction = z.object({
   attemptId: z.string(),
 });
 
+const RestartAction = z.object({
+  action: z.literal("restart"),
+});
+
 const RoomAction = z.discriminatedUnion("action", [
   JoinAction,
   LeaveAction,
@@ -76,6 +80,7 @@ const RoomAction = z.discriminatedUnion("action", [
   StartAction,
   AdvanceAction,
   PickAction,
+  RestartAction,
 ]);
 
 export async function GET(
@@ -434,6 +439,45 @@ export async function POST(
     await pusher.trigger(`presence-room-${code}`, "pick-changed", {
       userId,
       round: room.currentRound,
+    });
+    return NextResponse.json({ room });
+  }
+
+  if (action === "restart") {
+    if (room.hostId !== userId) {
+      return NextResponse.json({ error: "host only" }, { status: 403 });
+    }
+    if (room.status !== "ended") {
+      return NextResponse.json(
+        { error: "can only restart from ended state" },
+        { status: 409 },
+      );
+    }
+
+    // Delete all attempt and vote keys from the finished game.
+    const roundsPlayed = room.currentRound;
+    const deleteKeys = [];
+    for (let r = 1; r <= roundsPlayed; r++) {
+      deleteKeys.push(`room:${code}:attempts:${r}`, `room:${code}:votes:${r}`);
+    }
+    if (deleteKeys.length > 0) await redis.del(...deleteKeys);
+
+    // Reset room back to lobby state, preserving players, host, and settings.
+    room.status = "lobby";
+    room.currentRound = 0;
+    room.targetId = null;
+    room.seed = null;
+    room.targetImageUrl = null;
+    room.targetPrompt = null;
+    room.scores = {};
+    room.picks = {};
+    room.phaseEndsAt = null;
+    room.tiebreakerPlayers = null;
+    room.players = room.players.map((p) => ({ ...p, ready: false }));
+
+    await saveRoom(room);
+    await pusher.trigger(`presence-room-${code}`, "game-restarted", {
+      status: "lobby",
     });
     return NextResponse.json({ room });
   }

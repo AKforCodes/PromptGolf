@@ -69,7 +69,7 @@ src/
     room/[code]/spectate/page.tsx  # projector view, read-only
     api/v1/
       rooms/route.ts                       # POST create
-      rooms/[code]/route.ts                # GET state, POST join/leave/update/ready/unready/start/advance/pick
+      rooms/[code]/route.ts                # GET state, POST join/leave/update/ready/unready/start/advance/pick/restart
       rooms/[code]/round/[n]/route.ts      # GET round details (finalAttempts, votes, target — for voting + reveal screens)
       user/seed/route.ts                   # GET mint user_id cookie
       pusher/auth/route.ts                 # POST presence channel auth
@@ -311,6 +311,7 @@ reveal   ─────────── (15s; targetPrompt + scores broadcast
 | `vote-submitted` | each vote received | `{ voterId, round }` (value private) |
 | `reveal-starting` | voting → reveal | `{ status, round, phaseEndsAt, targetPrompt, scores }` |
 | `game-ended` | last round reveal ends | `{ status, scores }` |
+| `game-restarted` | host restarts from ended screen | `{ status: "lobby" }` |
 
 ## Conventions
 
