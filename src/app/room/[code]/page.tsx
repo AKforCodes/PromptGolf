@@ -282,7 +282,7 @@ function RoomLobby({ code }: { code: string }) {
   const allReady =
     nonHostPrompters.length > 0 &&
     nonHostPrompters.every((p) => p.ready);
-  const canStart = isHost && allReady && players.length >= 2;
+  const canStart = isHost && allReady && players.length >= 3;
   const myReady = players.find((p) => p.userId === userId)?.ready ?? false;
 
   const update = <K extends keyof RoomSettings>(
@@ -535,8 +535,8 @@ function RoomLobby({ code }: { code: string }) {
               onClick={handleStart}
               disabled={!canStart}
             >
-              {players.length < 2
-                ? "Waiting for players…"
+              {players.length < 3
+                ? `Waiting for players… (${players.length}/3)`
                 : !allReady
                   ? "Waiting on ready up…"
                   : "Start Round"}

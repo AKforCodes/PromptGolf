@@ -25,11 +25,16 @@ export async function createRoom(
 ): Promise<RoomState> {
   const code = generateCode()
 
+  // Force the host into the prompter role regardless of what the caller
+  // supplied — a spectator-host can't ready up, can't be voted on, and
+  // can't be promoted by `assignRole` later. Sanitise at the boundary.
+  const sanitisedHost: Player = { ...host, role: "prompter" }
+
   const room: RoomState = {
     code,
-    hostId: host.userId,
+    hostId: sanitisedHost.userId,
     settings,
-    players: [host],
+    players: [sanitisedHost],
     status: "lobby",
     currentRound: 0,
     targetId: null,
@@ -82,6 +87,19 @@ export async function leaveRoom(
 
   if (room.hostId === userId && room.players.length > 0) {
     room.hostId = room.players[0].userId
+  }
+
+  // Auto-promote the earliest-joined spectator if a prompter slot is free.
+  // Fixes: (a) waiting spectators not promoted when a prompter leaves,
+  // (b) queue-jumping by late joiners, (c) sticky spectator role.
+  const prompterCount = room.players.filter((p) => p.role === "prompter").length
+  if (prompterCount < room.settings.maxPlayers) {
+    const candidate = room.players
+      .filter((p) => p.role === "spectator")
+      .sort((a, b) => a.joinedAt - b.joinedAt)[0]
+    if (candidate) {
+      candidate.role = "prompter"
+    }
   }
 
   await saveRoom(room)

@@ -3,7 +3,7 @@ import type { RoomSettings } from "./types";
 type Category = RoomSettings["category"];
 type Difficulty = RoomSettings["difficulty"];
 
-export const MIN_PLAYERS = 1;
+export const MIN_PLAYERS = 3;
 export const MAX_PLAYERS = 8;
 export const MIN_ROUNDS = 1;
 export const MAX_ROUNDS = 5;

@@ -61,6 +61,47 @@ describe("RoomSettings", () => {
   it("rejects promptMaxLength below 50", () => {
     expect(() => RoomSettings.parse({ promptMaxLength: 49 })).toThrow()
   })
+
+  it("rejects maxPlayers below 3 (minimum capacity)", () => {
+    expect(() => RoomSettings.parse({ maxPlayers: 2 })).toThrow()
+    expect(() => RoomSettings.parse({ maxPlayers: 1 })).toThrow()
+    expect(() => RoomSettings.parse({ maxPlayers: 0 })).toThrow()
+  })
+
+  it("accepts maxPlayers at the new floor of 3", () => {
+    const result = RoomSettings.parse({ maxPlayers: 3 })
+    expect(result.maxPlayers).toBe(3)
+  })
+
+  it("rejects memorizeTime out of range", () => {
+    expect(() => RoomSettings.parse({ memorizeTime: 4 })).toThrow()
+    expect(() => RoomSettings.parse({ memorizeTime: 31 })).toThrow()
+  })
+
+  it("accepts memorizeTime at boundaries", () => {
+    expect(RoomSettings.parse({ memorizeTime: 5 }).memorizeTime).toBe(5)
+    expect(RoomSettings.parse({ memorizeTime: 30 }).memorizeTime).toBe(30)
+  })
+
+  it("rejects attemptsPerRound out of range", () => {
+    expect(() => RoomSettings.parse({ attemptsPerRound: 0 })).toThrow()
+    expect(() => RoomSettings.parse({ attemptsPerRound: 6 })).toThrow()
+  })
+
+  it("rejects non-integer numbers", () => {
+    expect(() => RoomSettings.parse({ rounds: 2.5 })).toThrow()
+    expect(() => RoomSettings.parse({ maxPlayers: 4.1 })).toThrow()
+    expect(() => RoomSettings.parse({ timer: 60.5 })).toThrow()
+  })
+
+  it("rejects invalid difficulty", () => {
+    expect(() => RoomSettings.parse({ difficulty: "extreme" })).toThrow()
+    expect(() => RoomSettings.parse({ difficulty: "EASY" })).toThrow() // case-sensitive
+  })
+
+  it("rejects invalid gameMode", () => {
+    expect(() => RoomSettings.parse({ gameMode: "battle" })).toThrow()
+  })
 })
 
 describe("Player", () => {

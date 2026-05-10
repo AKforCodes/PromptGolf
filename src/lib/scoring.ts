@@ -64,7 +64,11 @@ export function selectFinalAttempts<T extends PickableAttempt>(
 export const POINTS_PER_VOTE = 10
 
 // Returns the userIds tied for the highest score, restricted to `eligible`.
-// Returns [] if eligible is empty or every eligible player has score 0.
+// Returns [] only when `eligible` is empty.
+// All-zero pools still return the full list — they're tied, just at 0.
+// Solo eligible players always return [self] so the server can declare them
+// the winner.
+//
 // Used at end-of-round to detect ties:
 //   - main rounds done with 2+ tied → enter tiebreaker
 //   - tiebreaker round done with 2+ still tied → another tiebreaker
@@ -75,8 +79,7 @@ export function findTopTiedPlayers(
 ): string[] {
   if (eligible.length === 0) return []
   const list = eligible.map((uid) => ({ uid, score: scores[uid] ?? 0 }))
-  const max = Math.max(0, ...list.map((s) => s.score))
-  if (max === 0) return []
+  const max = Math.max(...list.map((s) => s.score))
   return list.filter((s) => s.score === max).map((s) => s.uid)
 }
 
