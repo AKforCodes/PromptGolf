@@ -406,7 +406,12 @@ function RoomLobby({ code }: { code: string }) {
 
   if (roomState.status === "voting") {
     return (
-      <VotingView roomState={roomState} userId={userId} onLeave={handleLeave} />
+      <VotingView
+        code={code}
+        roomState={roomState}
+        userId={userId}
+        onLeave={handleLeave}
+      />
     );
   }
 
