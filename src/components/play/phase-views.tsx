@@ -73,13 +73,7 @@ export function VotingView({
 }: VotingPhaseProps) {
   const { playBubble } = useSoundEffect();
   const secondsLeft = usePhaseCountdown(roomState.phaseEndsAt);
-  const { currentRound, tiebreakerPlayers } = roomState;
-
-  const me = roomState.players.find((p) => p.userId === userId);
-  const isTiebreaker = tiebreakerPlayers != null;
-  const isContestant = isTiebreaker && tiebreakerPlayers.includes(userId);
-  const cannotVote =
-    isTiebreaker && (isContestant || me?.role !== "prompter");
+  const { currentRound } = roomState;
 
   const [finalAttempts, setFinalAttempts] = useState<Attempt[]>([]);
   const [votes, setVotes] = useState<Vote[]>([]);
@@ -178,21 +172,7 @@ export function VotingView({
             </p>
           </div>
 
-          {cannotVote ? (
-            <div className="flex items-center justify-center rounded-2xl border-[3px] border-dashed border-ink/40 bg-cream p-8 text-center">
-              <div>
-                <div className="text-4xl">{isContestant ? "🏆" : "👀"}</div>
-                <p className="mt-2 font-heading text-sm font-semibold uppercase tracking-wide text-ink/60">
-                  {isContestant
-                    ? "you're being voted on"
-                    : "spectators don't vote in tiebreakers"}
-                </p>
-                <p className="mt-1 font-heading text-xs text-ink/40">
-                  results in {secondsLeft}s
-                </p>
-              </div>
-            </div>
-          ) : loading ? (
+          {loading ? (
             <p className="text-center font-heading text-sm text-ink/50">
               loading attempts…
             </p>
@@ -292,16 +272,28 @@ function ScoreList({
     }))
     .sort((a, b) => b.score - a.score);
 
+  // Competition ranking ("1224"): tied scores share the same rank,
+  // next different score gets rank = index + 1.
+  let prevRank = 0
+  let prevScore: number | undefined
+  const ranks = rows.map((r, i) => {
+    const rank =
+      prevScore !== undefined && r.score === prevScore ? prevRank : i + 1
+    prevScore = r.score
+    prevRank = rank
+    return { ...r, rank }
+  })
+
   return (
     <ol className="flex flex-col gap-2">
-      {rows.map((r, i) => (
+      {ranks.map((r) => (
         <li
           key={r.userId}
           className="flex items-center justify-between rounded-2xl border-[3px] border-ink bg-cream px-4 py-3"
         >
           <div className="flex items-center gap-3">
             <span className="font-heading text-lg font-bold tabular-nums">
-              #{i + 1}
+              #{r.rank}
             </span>
             <span className="font-heading text-base font-semibold">
               {r.name}

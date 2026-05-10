@@ -8,8 +8,8 @@ import {
 } from "framer-motion";
 import type { ReactNode } from "react";
 
-// Shared visual + motion frame for the game-intro and tiebreaker-intro
-// slideshows. Wraps each slide in a chunky jklm-styled card and crossfades
+// Shared visual + motion frame for the game-intro slideshow.
+// Wraps each slide in a chunky jklm-styled card and crossfades
 // between them with spring physics. Floating decoration shapes drift in the
 // backdrop for ambience.
 

@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest"
 import {
   tiebreak,
   awardRoundScores,
-  findTopTiedPlayers,
   selectFinalAttempts,
 } from "../scoring"
 
@@ -162,247 +161,7 @@ describe("awardRoundScores", () => {
   })
 })
 
-describe("findTopTiedPlayers", () => {
-  it("returns the single leader when there is no tie", () => {
-    const tied = findTopTiedPlayers(
-      { alice: 30, bob: 20, carol: 10 },
-      ["alice", "bob", "carol"]
-    )
-    expect(tied).toEqual(["alice"])
-  })
 
-  it("returns all players tied for the top score", () => {
-    const tied = findTopTiedPlayers(
-      { alice: 30, bob: 30, carol: 10 },
-      ["alice", "bob", "carol"]
-    )
-    expect(tied.sort()).toEqual(["alice", "bob"])
-  })
-
-  it("ignores players outside the eligible set", () => {
-    const tied = findTopTiedPlayers(
-      { alice: 30, bob: 30, carol: 50 },
-      ["alice", "bob"]
-    )
-    expect(tied.sort()).toEqual(["alice", "bob"])
-  })
-
-  it("returns the full pool when scores are missing or all zero", () => {
-    // Players default to 0 when missing — they're tied at 0.
-    expect(findTopTiedPlayers({}, ["alice", "bob"]).sort()).toEqual([
-      "alice",
-      "bob",
-    ])
-    expect(
-      findTopTiedPlayers({ alice: 0, bob: 0 }, ["alice", "bob"]).sort()
-    ).toEqual(["alice", "bob"])
-  })
-
-  it("returns [] when eligible is empty", () => {
-    expect(findTopTiedPlayers({ alice: 30 }, [])).toEqual([])
-  })
-
-  it("treats missing scores as 0", () => {
-    const tied = findTopTiedPlayers({ alice: 10 }, ["alice", "bob"])
-    expect(tied).toEqual(["alice"])
-  })
-
-  it("treats negative scores as actual values (no implicit clamp)", () => {
-    // Defensive: scoring is currently only additive so negatives shouldn't
-    // appear, but the helper must not silently floor them to 0. The top
-    // here is -5 — alice and bob tie there, carol trails.
-    const tied = findTopTiedPlayers(
-      { alice: -5, bob: -5, carol: -10 },
-      ["alice", "bob", "carol"],
-    )
-    expect(tied.sort()).toEqual(["alice", "bob"])
-  })
-
-  it("simulates a cascading 4 → 2 → 1 tiebreaker", () => {
-    // All 4 tied at 30 after main rounds.
-    const round1 = { alice: 30, bob: 30, carol: 30, dan: 30 }
-    let pool = ["alice", "bob", "carol", "dan"]
-    let scores: Record<string, number> = round1
-
-    let tied = findTopTiedPlayers(scores, pool)
-    expect(tied.length).toBe(4)
-    pool = tied
-
-    // Tiebreaker round 1: alice and bob both get +20, carol/dan get +10.
-    scores = awardRoundScores(scores, [], [
-      { targetId: "alice" },
-      { targetId: "alice" },
-      { targetId: "bob" },
-      { targetId: "bob" },
-      { targetId: "carol" },
-      { targetId: "dan" },
-    ])
-    tied = findTopTiedPlayers(scores, pool)
-    expect(tied.sort()).toEqual(["alice", "bob"])
-    pool = tied
-
-    // Tiebreaker round 2: alice gets +10, bob gets nothing.
-    scores = awardRoundScores(scores, [], [{ targetId: "alice" }])
-    tied = findTopTiedPlayers(scores, pool)
-    expect(tied).toEqual(["alice"])
-  })
-
-  it("returns the original pool when nobody scored in a tiebreaker round", () => {
-    // Edge: tied players in tiebreaker but no votes cast — stays tied.
-    const tied = findTopTiedPlayers(
-      { alice: 30, bob: 30 },
-      ["alice", "bob"],
-    )
-    expect(tied.sort()).toEqual(["alice", "bob"])
-  })
-
-  it("ignores eligible IDs that aren't actually keys in scores", () => {
-    const tied = findTopTiedPlayers(
-      { alice: 50 },
-      ["alice", "ghost"], // ghost has no score → 0
-    )
-    expect(tied).toEqual(["alice"])
-  })
-})
-
-describe("tiebreaker scenarios — multiple users", () => {
-  // These tests simulate the server's reveal-branch loop: after the final
-  // main round, narrow tiebreaker pool repeatedly until exactly one player
-  // remains. They exercise the same `findTopTiedPlayers` + `awardRoundScores`
-  // composition the route handler uses.
-
-  function runTiebreakerRound(
-    scores: Record<string, number>,
-    pool: string[],
-    voteTargets: string[],
-  ): { scores: Record<string, number>; nextPool: string[] } {
-    const next = awardRoundScores(
-      scores,
-      [],
-      voteTargets.map((t) => ({ targetId: t })),
-    )
-    const tied = findTopTiedPlayers(next, pool)
-    // If still tied → next pool is the tied subset; if single leader →
-    // game ends, pool is irrelevant. Mirror the server contract.
-    return { scores: next, nextPool: tied.length <= 1 ? [] : tied }
-  }
-
-  it("3-way tie narrows to a single winner in one round", () => {
-    let state: ReturnType<typeof runTiebreakerRound> = {
-      scores: { a: 30, b: 30, c: 30 },
-      nextPool: ["a", "b", "c"],
-    }
-    state = runTiebreakerRound(state.scores, state.nextPool, ["a", "a", "b"])
-    // a got 20 points (2 votes), b got 10, c got 0 → a leads alone
-    expect(state.scores).toEqual({ a: 50, b: 40, c: 30 })
-    expect(state.nextPool).toEqual([]) // single leader → game ends
-  })
-
-  it("3-way tie narrows to 2-way tie, then to single winner", () => {
-    let state: ReturnType<typeof runTiebreakerRound> = {
-      scores: { a: 30, b: 30, c: 30 },
-      nextPool: ["a", "b", "c"],
-    }
-
-    // Round 1: a and b each get 1 vote, c gets 0 → a and b still tied at 40
-    state = runTiebreakerRound(state.scores, state.nextPool, ["a", "b"])
-    expect(state.scores).toEqual({ a: 40, b: 40, c: 30 })
-    expect(state.nextPool.sort()).toEqual(["a", "b"])
-
-    // Round 2: only a gets a vote → a wins
-    state = runTiebreakerRound(state.scores, state.nextPool, ["a"])
-    expect(state.nextPool).toEqual([])
-  })
-
-  it("tiebreaker pool narrows even when an old leader pulls further ahead via spectator votes", () => {
-    // c is not in the pool — they don't compete. Even if someone tried to
-    // vote for them during a tiebreaker, the server rejects it. The helper
-    // only inspects the pool subset.
-    let state: ReturnType<typeof runTiebreakerRound> = {
-      scores: { a: 30, b: 30, c: 100 },
-      nextPool: ["a", "b"],
-    }
-    state = runTiebreakerRound(state.scores, state.nextPool, ["a"])
-    // a now at 40, b stays at 30. c untouched.
-    expect(state.scores.c).toBe(100)
-    expect(state.nextPool).toEqual([]) // a wins among the pool
-  })
-
-  it("5-way tie cascading 5 → 3 → 2 → 1", () => {
-    let scores: Record<string, number> = {
-      a: 50,
-      b: 50,
-      c: 50,
-      d: 50,
-      e: 50,
-    }
-    let pool = ["a", "b", "c", "d", "e"]
-    expect(findTopTiedPlayers(scores, pool).length).toBe(5)
-
-    // Round 1: a, b, c each get 1 vote → 60. d, e stay at 50.
-    let res = runTiebreakerRound(scores, pool, ["a", "b", "c"])
-    expect(res.nextPool.sort()).toEqual(["a", "b", "c"])
-    scores = res.scores
-    pool = res.nextPool
-
-    // Round 2: a, b each get 1 → 70. c stays at 60.
-    res = runTiebreakerRound(scores, pool, ["a", "b"])
-    expect(res.nextPool.sort()).toEqual(["a", "b"])
-    scores = res.scores
-    pool = res.nextPool
-
-    // Round 3: a gets 1 → 80. b stays.
-    res = runTiebreakerRound(scores, pool, ["a"])
-    expect(res.nextPool).toEqual([])
-  })
-
-  it("zero-vote tiebreaker round keeps everyone tied (no progression)", () => {
-    let state: ReturnType<typeof runTiebreakerRound> = {
-      scores: { a: 30, b: 30 },
-      nextPool: ["a", "b"],
-    }
-    state = runTiebreakerRound(state.scores, state.nextPool, [])
-    // No votes, scores unchanged, both still tied.
-    expect(state.scores).toEqual({ a: 30, b: 30 })
-    expect(state.nextPool.sort()).toEqual(["a", "b"])
-  })
-
-  it("a contestant cannot benefit from votes targeting eliminated players", () => {
-    // Server-side validation rejects votes targeting non-tiebreaker players.
-    // The helper here just confirms the helper itself ignores them.
-    const scores = awardRoundScores({ a: 30, b: 30 }, [], [
-      { targetId: "ghost" }, // not in pool
-      { targetId: "a" },
-    ])
-    const tied = findTopTiedPlayers(scores, ["a", "b"])
-    expect(tied).toEqual(["a"]) // a leads even though ghost got a vote
-  })
-
-  it("simultaneous votes from many users — vote count is the dominant signal", () => {
-    // 8 voters, 2 contestants. 5-3 split.
-    const scores = awardRoundScores({ a: 100, b: 100 }, [], [
-      { targetId: "a" },
-      { targetId: "a" },
-      { targetId: "a" },
-      { targetId: "a" },
-      { targetId: "a" },
-      { targetId: "b" },
-      { targetId: "b" },
-      { targetId: "b" },
-    ])
-    expect(scores).toEqual({ a: 150, b: 130 })
-    const tied = findTopTiedPlayers(scores, ["a", "b"])
-    expect(tied).toEqual(["a"])
-  })
-
-  it("tied at zero in tiebreaker pool returns the tied set (server runs another round)", () => {
-    // After the zero-floor fix: all-zero scores still mean "tied at 0",
-    // so the server runs another tiebreaker round (capped by
-    // MAX_TIEBREAKER_ROUNDS to prevent infinite loops).
-    const tied = findTopTiedPlayers({ a: 0, b: 0 }, ["a", "b"])
-    expect(tied.sort()).toEqual(["a", "b"])
-  })
-})
 
 // ─────────────────────────────────────────────────────────────────────
 // Ruthless scoring tests — these probe permissive helpers that lack
@@ -442,21 +201,7 @@ describe("scoring.ts — ruthless edge cases", () => {
     expect(next).toEqual({ alice: 10 }) // weight ignored
   })
 
-  it("FIXED: all-zero scores now return the tied set, server runs another round", () => {
-    // Was: returned [] which made the server end the game with no winner.
-    // Now: returns the tied players. Server runs another tiebreaker round
-    // (capped by MAX_TIEBREAKER_ROUNDS = 5).
-    const tied = findTopTiedPlayers({ a: 0, b: 0, c: 0 }, ["a", "b", "c"])
-    expect(tied.sort()).toEqual(["a", "b", "c"])
-  })
 
-  it("FIXED: single zero-score player is now declared the winner", () => {
-    // Was: returned [] → server ended game without naming them.
-    // Now: returns [a] → server declares a the single leader → game ends
-    // with a as winner.
-    const tied = findTopTiedPlayers({ a: 0 }, ["a"])
-    expect(tied).toEqual(["a"])
-  })
 
   it("BUG: tiebreak ranking uses similarity (vestigial, always 0) — could mis-sort if it ever returns", () => {
     // The sort comparator references similarity. If CLIP scoring is ever
@@ -510,22 +255,7 @@ describe("scoring.ts — ruthless edge cases", () => {
     expect(next).toEqual({ alice: 40 })
   })
 
-  it("MITIGATED: helper alone would stalemate forever — route handler caps with MAX_TIEBREAKER_ROUNDS", () => {
-    // Helper-level: a zero-vote round leaves the tied set unchanged, so
-    // helper-only loop would never terminate. The route handler now caps
-    // tiebreaker rounds at MAX_TIEBREAKER_ROUNDS=5 and declares all tied
-    // players co-winners on stalemate.
-    let scores = { alice: 30, bob: 30 }
-    let pool = ["alice", "bob"]
-    for (let i = 0; i < 100; i++) {
-      // No votes cast in this tiebreaker round.
-      const tied = findTopTiedPlayers(scores, pool)
-      if (tied.length <= 1) break
-      pool = tied
-    }
-    // After 100 simulated rounds, still tied — the helper never narrows.
-    expect(pool.sort()).toEqual(["alice", "bob"])
-  })
+
 
   it("CONFIRMS-CURRENT: float scores are preserved (no rounding in helper)", () => {
     // POINTS_PER_VOTE is integer 10 so this is moot today, but if anyone

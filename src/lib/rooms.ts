@@ -44,7 +44,6 @@ export async function createRoom(
     scores: {},
     picks: {},
     phaseEndsAt: null,
-    tiebreakerPlayers: null,
     createdAt: Date.now(),
   }
 
@@ -87,18 +86,21 @@ export async function leaveRoom(
 
   if (room.hostId === userId && room.players.length > 0) {
     room.hostId = room.players[0].userId
+
   }
 
-  // Auto-promote the earliest-joined spectator if a prompter slot is free.
-  // Fixes: (a) waiting spectators not promoted when a prompter leaves,
+  // Auto-promote the earliest-joined spectators to fill every open prompter
+  // slot. Fixes: (a) waiting spectators not promoted when a prompter leaves,
   // (b) queue-jumping by late joiners, (c) sticky spectator role.
   const prompterCount = room.players.filter((p) => p.role === "prompter").length
-  if (prompterCount < room.settings.maxPlayers) {
-    const candidate = room.players
+  const openSlots = room.settings.maxPlayers - prompterCount
+  if (openSlots > 0) {
+    const candidates = room.players
       .filter((p) => p.role === "spectator")
-      .sort((a, b) => a.joinedAt - b.joinedAt)[0]
-    if (candidate) {
-      candidate.role = "prompter"
+      .sort((a, b) => a.joinedAt - b.joinedAt)
+      .slice(0, openSlots)
+    for (const c of candidates) {
+      c.role = "prompter"
     }
   }
 

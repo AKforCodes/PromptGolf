@@ -6,7 +6,7 @@ export const RoomSettings = z.object({
   maxPlayers: z.number().int().min(3).max(8).default(8),
   timer: z.number().int().min(30).max(120).default(60),
   // How long the target image is shown before it disappears and prompting begins.
-  memorizeTime: z.number().int().min(5).max(30).default(10),
+  memorizeTime: z.number().int().min(5).max(30).default(20),
   promptMaxLength: z.number().int().min(50).max(200).default(200),
   // Each player gets up to N FLUX submissions per round. Capped at 5 to bound cost.
   attemptsPerRound: z.number().int().min(1).max(5).default(3),
@@ -38,7 +38,6 @@ export const RoomStatus = z.enum([
   "picking",
   "voting",
   "reveal",
-  "tiebreaker-intro",
   "ended",
 ])
 export type RoomStatus = z.infer<typeof RoomStatus>
@@ -76,11 +75,7 @@ export const RoomState = z.object({
   // a countdown to this value and auto-fire `advance` when it elapses.
   // Null in `lobby` and `ended`; null transiently while `generating`.
   phaseEndsAt: z.number().nullable().default(null),
-  // When non-null, the game is in tiebreaker mode and only these userIds
-  // may submit/be voted on. Set after the final main round if 2+ players
-  // are tied for the lead. Narrows on each tiebreaker round until exactly
-  // one player remains, at which point the game ends.
-  tiebreakerPlayers: z.array(z.string()).nullable().default(null),
+
   createdAt: z.number(),
 })
 

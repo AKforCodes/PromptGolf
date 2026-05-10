@@ -12,6 +12,7 @@ import {
 import { useRouter } from "next/navigation";
 import type { Channel } from "pusher-js";
 import type { Player, RoomSettings, RoomState } from "@/lib/types";
+import { MIN_PLAYERS } from "@/lib/room-constants";
 import { tryCatch } from "@/lib/result";
 import {
   advanceRoom,
@@ -39,7 +40,6 @@ import { PlayingView } from "@/components/play/playing-view";
 import { SpectatorView } from "@/components/play/spectator-view";
 import { RoundLoadingView } from "@/components/play/round-loading-view";
 import { PickingView } from "@/components/play/picking-view";
-import { TiebreakerIntroView } from "@/components/play/tiebreaker-intro-view";
 import { GameIntroView } from "@/components/play/game-intro-view";
 import {
   EndedView,
@@ -58,7 +58,7 @@ const FALLBACK_SETTINGS: RoomSettings = {
   rounds: 3,
   maxPlayers: 8,
   timer: 60,
-  memorizeTime: 10,
+  memorizeTime: 20,
   promptMaxLength: 200,
   attemptsPerRound: 3,
   category: "animals",
@@ -186,7 +186,6 @@ function RoomLobby({ code }: { code: string }) {
     channel.bind("voting-starting", onChange);
     channel.bind("vote-submitted", onChange);
     channel.bind("reveal-starting", onChange);
-    channel.bind("tiebreaker-intro-starting", onChange);
     channel.bind("game-intro-starting", onChange);
     channel.bind("game-ended", onChange);
     channel.bind("game-restarted", onChange);
@@ -216,7 +215,6 @@ function RoomLobby({ code }: { code: string }) {
       status !== "picking" &&
       status !== "voting" &&
       status !== "reveal" &&
-      status !== "tiebreaker-intro" &&
       status !== "game-intro"
     ) {
       return;
@@ -278,21 +276,16 @@ function RoomLobby({ code }: { code: string }) {
   const myRole =
     players.find((p) => p.userId === userId)?.role ?? null;
   const isSpectator = myRole === "spectator";
-  // During a tiebreaker, prompters who didn't qualify watch instead of play.
-  const isEliminatedFromTiebreaker = Boolean(
-    roomState?.tiebreakerPlayers &&
-      !roomState.tiebreakerPlayers.includes(userId) &&
-      myRole === "prompter",
-  );
   const nonHostPrompters = roomState
     ? players.filter(
         (p) => p.userId !== roomState.hostId && p.role === "prompter",
       )
     : [];
+  const readyCount = nonHostPrompters.filter((p) => p.ready).length;
   const allReady =
     nonHostPrompters.length > 0 &&
-    nonHostPrompters.every((p) => p.ready);
-  const canStart = isHost && allReady && players.length >= 3;
+    readyCount === nonHostPrompters.length;
+  const canStart = isHost && allReady && players.length >= MIN_PLAYERS;
   const myReady = players.find((p) => p.userId === userId)?.ready ?? false;
 
   const update = <K extends keyof RoomSettings>(
@@ -427,16 +420,6 @@ function RoomLobby({ code }: { code: string }) {
     );
   }
 
-  if (roomState.status === "tiebreaker-intro") {
-    return (
-      <TiebreakerIntroView
-        roomState={roomState}
-        userId={userId}
-        onLeave={handleLeave}
-      />
-    );
-  }
-
   if (roomState.status === "generating") {
     return (
       <RoundLoadingView
@@ -448,7 +431,7 @@ function RoomLobby({ code }: { code: string }) {
   }
 
   if (roomState.status === "playing" || roomState.status === "countdown") {
-    if (isSpectator || isEliminatedFromTiebreaker) {
+    if (isSpectator) {
       return (
         <SpectatorView
           key={roomState.currentRound}
@@ -550,10 +533,10 @@ function RoomLobby({ code }: { code: string }) {
               onClick={handleStart}
               disabled={!canStart}
             >
-              {players.length < 3
-                ? `Waiting for players… (${players.length}/3)`
+              {players.length < MIN_PLAYERS
+                ? `Waiting for players… ${readyCount}/${players.length} ready`
                 : !allReady
-                  ? "Waiting on ready up…"
+                  ? `${readyCount}/${nonHostPrompters.length} ready`
                   : "Start Round"}
             </Button>
           )}
