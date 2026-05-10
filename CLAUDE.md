@@ -71,8 +71,9 @@ src/
       rooms/[code]/round/[n]/route.ts      # GET round details (finalAttempts, votes, target — for voting + reveal screens)
       user/seed/route.ts                   # GET mint user_id cookie
       pusher/auth/route.ts                 # POST presence channel auth
-      generate/route.ts                    # POST player prompt → FLUX + CLIP scoring → Attempt
+      generate/route.ts                    # POST player prompt → FLUX → Attempt
       vote/route.ts                        # POST vote on another player's final attempt
+      transcribe/route.ts                  # POST audio (multipart) → ElevenLabs Scribe → text (push-to-talk for voice prompting)
       og/[attemptId]/route.ts              # share card PNG
   lib/
     types.ts          # RoomSettings, Player, RoomState, Attempt, Vote, VoteValue (zod schemas)
@@ -268,7 +269,7 @@ This means the lobby roster updates itself — no custom join/leave events neede
 3. **Join.** Players land on `/room/ABCD` → `POST /api/v1/rooms/[code] { action: "join", name, avatarSeed }` → first N joiners get `prompter`, rest `spectator`. Lobby shows avatars, names, ready toggle. Host has Start button.
 4. **Ready up.** Non-host players `POST { action: "ready" }` (toggleable via `unready`). Host doesn't ready themselves. Server fires `player-ready` over Pusher; clients refetch.
 5. **Start.** Host fires `POST { action: "start" }` → validations (host, ≥1 non-host, all non-host ready) → server runs the **keystone composition** (status flips `lobby → generating`, broadcasts `round-generating`, then runs `getCategoryPrompt → falGenerate`, caches `targetImageUrl` + `targetPrompt` (server-only) on the room, flips `generating → playing`, stamps `phaseEndsAt = now + settings.timer * 1000`, broadcasts `round-starting` with `{targetImageUrl, category, phaseEndsAt}`). Total wall time ≈ 1s warm.
-6. **Playing phase** (timer-bounded). Players submit prompts via `POST /api/v1/generate { roomCode, prompt }`. Each submission is FLUX'd with **a random seed** (no longer shares the round's seed — identical prompts now produce different images, no duplicate-image vote-splitting). Persisted as an `Attempt` (with placeholder `similarity: 0, qualified: false`), broadcast as `attempt-submitted`. Per-player cap: `settings.attemptsPerRound`. Per-player debounce: 3s atomic Redis NX-EX. Players also `POST { action: "pick", attemptId }` to lock in which attempt is shown to voters (changeable any time during playing; if no pick, server falls back to last-submitted).
+6. **Playing phase** (timer-bounded). Players submit prompts via `POST /api/v1/generate { roomCode, prompt }`. Each submission is FLUX'd with **a random seed** (no longer shares the round's seed — identical prompts now produce different images, no duplicate-image vote-splitting). Persisted as an `Attempt` (with placeholder `similarity: 0, qualified: false`), broadcast as `attempt-submitted`. Per-player cap: `settings.attemptsPerRound`. Per-player debounce: 3s atomic Redis NX-EX. **Voice prompting:** clients can record audio (push-to-talk, 30s cap) and POST it to `/api/v1/transcribe` (multipart, audio file in `audio` field). The route forwards to ElevenLabs Scribe and returns the transcribed text; the client populates the prompt input with the result and the player edits/submits manually (no auto-submit). Players also `POST { action: "pick", attemptId }` to lock in which attempt is shown to voters (changeable any time during playing; if no pick, server falls back to last-submitted).
 7. **Voting phase** (20s). When the playing-phase countdown hits zero, any client fires `POST { action: "advance" }`. Server validates `Date.now() >= phaseEndsAt`, flips to `voting`, stamps a new `phaseEndsAt`, broadcasts `voting-starting`. Clients fetch `GET /api/v1/rooms/[code]/round/[n]` to populate the voting screen — the target image alongside every player's pick. Each voter `POST /api/v1/vote { roomCode, targetUserId }` to vote for the image they think is closest. Anti-self-vote. Each voter has exactly ONE vote per round; voting again upserts (last vote wins). Server broadcasts `vote-submitted { voterId }` (target stays private until reveal).
 8. **Reveal phase** (15s). `advance` again → server reads attempts + votes from Redis → `selectFinalAttempts(attempts, room.picks)` → `awardRoundScores(room.scores, finals, votes)` (each vote = 1 point) → flips to `reveal` → broadcasts `reveal-starting` with `{targetPrompt, scores, phaseEndsAt}`. UI shows target prompt, per-player finals, who-voted-for-whom, leaderboard.
 9. **Next round or end.** `advance` from `reveal`: if `currentRound >= settings.rounds` → status `ended`, broadcast `game-ended` with final scores. Else → `generateRoundTarget` runs again (FLUX + CLIP for round N+1's target), loop back to step 6.
@@ -345,7 +346,8 @@ NEXT_PUBLIC_PUSHER_CLUSTER=
 # LLM for commentary (optional)
 ANTHROPIC_API_KEY=
 
-# Voice commentary (optional)
+# ElevenLabs — used for push-to-talk speech-to-text via /api/v1/transcribe (Scribe model).
+# ELEVENLABS_VOICE_ID is unused (voice commentary was dropped); kept for forward-compat.
 ELEVENLABS_API_KEY=
 ELEVENLABS_VOICE_ID=
 

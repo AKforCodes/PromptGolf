@@ -17,6 +17,7 @@ const ENV: Record<string, string | undefined> = {
   UPSTASH_REDIS_REST_TOKEN: process.env.UPSTASH_REDIS_REST_TOKEN,
   FAL_KEY: process.env.FAL_KEY,
   REPLICATE_API_TOKEN: process.env.REPLICATE_API_TOKEN,
+  ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
   NODE_ENV: process.env.NODE_ENV,
 };
 
