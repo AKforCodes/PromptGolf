@@ -34,6 +34,7 @@ export function TiebreakerIntroView({
         .map((uid) => roomState.players.find((p) => p.userId === uid))
         .filter((p): p is NonNullable<typeof p> => Boolean(p)),
     [tiedIds, roomState.players]
+    
   );
 
   const isContestant = tiedIds.includes(userId);
