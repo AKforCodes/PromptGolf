@@ -1,6 +1,10 @@
 "use client";
 
-import type { RoomState } from "@/lib/types";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Attempt, RoomState, Vote } from "@/lib/types";
+import { ApiError, getRoundDetails, submitVote } from "@/lib/api";
+import { tryCatch } from "@/lib/result";
+import { getPusher } from "@/lib/pusher-client";
 import { Button } from "@/components/jklm/button";
 import { Card } from "@/components/jklm/card";
 import { usePhaseCountdown } from "./use-phase-countdown";
@@ -9,6 +13,10 @@ interface PhaseProps {
   roomState: RoomState;
   userId: string;
   onLeave: () => void;
+}
+
+interface VotingPhaseProps extends PhaseProps {
+  code: string;
 }
 
 function PhaseHeader({
@@ -55,12 +63,91 @@ function CountdownStrip({ secondsLeft }: { secondsLeft: number }) {
   );
 }
 
-export function VotingView({ roomState, userId, onLeave }: PhaseProps) {
+export function VotingView({
+  code,
+  roomState,
+  userId,
+  onLeave,
+}: VotingPhaseProps) {
   const secondsLeft = usePhaseCountdown(roomState.phaseEndsAt);
+  const { currentRound } = roomState;
+
+  const [finalAttempts, setFinalAttempts] = useState<Attempt[]>([]);
+  const [votes, setVotes] = useState<Vote[]>([]);
+  const [targetImageUrl, setTargetImageUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
+  const [voteError, setVoteError] = useState<string | null>(null);
+  const [voteBusy, setVoteBusy] = useState<boolean>(false);
+
+  // Initial fetch + refetch whenever a vote-submitted broadcast lands.
+  const refetch = useCallback(async () => {
+    const [err, data] = await tryCatch(getRoundDetails(code, currentRound));
+    if (err) {
+      console.error("getRoundDetails failed:", err);
+      return;
+    }
+    setFinalAttempts(data.finalAttempts);
+    setVotes(data.votes);
+    setTargetImageUrl(data.targetImageUrl);
+    setLoading(false);
+  }, [code, currentRound]);
+
+  useEffect(() => {
+    void refetch();
+  }, [refetch]);
+
+  useEffect(() => {
+    const pusher = getPusher();
+    const channel = pusher.subscribe(`presence-room-${code}`);
+    const onVote = () => {
+      void refetch();
+    };
+    channel.bind("vote-submitted", onVote);
+    return () => {
+      channel.unbind("vote-submitted", onVote);
+    };
+  }, [code, refetch]);
+
+  // Filter out my own pick — server also rejects self-votes (400), but we
+  // never even show the button.
+  const votableAttempts = useMemo(
+    () => finalAttempts.filter((a) => a.userId !== userId),
+    [finalAttempts, userId]
+  );
+
+  const myVote = useMemo(
+    () => votes.find((v) => v.voterId === userId) ?? null,
+    [votes, userId]
+  );
+
+  const playersById = useMemo(() => {
+    const map: Record<string, { name: string }> = {};
+    for (const p of roomState.players) map[p.userId] = { name: p.name };
+    return map;
+  }, [roomState.players]);
+
+  const handleVote = async (targetUserId: string) => {
+    if (voteBusy) return;
+    if (targetUserId === userId) return;
+    setVoteError(null);
+    setVoteBusy(true);
+    // Optimistic: replace any prior vote by us.
+    const prev = votes;
+    setVotes((vs) => [
+      ...vs.filter((v) => v.voterId !== userId),
+      { voterId: userId, targetId: targetUserId, submittedAt: Date.now() },
+    ]);
+    const [err] = await tryCatch(submitVote(code, targetUserId));
+    setVoteBusy(false);
+    if (err) {
+      setVotes(prev);
+      setVoteError(err instanceof ApiError ? err.message : "Vote failed");
+    }
+  };
 
   return (
     <main className="flex flex-1 flex-col px-4 py-6">
-      <div className="mx-auto w-full max-w-3xl">
+      <div className="mx-auto w-full max-w-4xl">
         <PhaseHeader
           roomState={roomState}
           userId={userId}
@@ -69,16 +156,98 @@ export function VotingView({ roomState, userId, onLeave }: PhaseProps) {
           pillBg="bg-sun"
         />
         <CountdownStrip secondsLeft={secondsLeft} />
-        <Card className="text-center">
-          <div className="mb-4 text-5xl">🗳️</div>
-          <h2 className="font-heading text-2xl font-bold uppercase tracking-wide">
-            Voting carousel
-          </h2>
-          <p className="mt-2 font-heading text-sm text-ink/60">
-            full voting UI lands next — the round will auto-advance when the
-            timer hits zero
-          </p>
+
+        <Card className="mb-4">
+          <div className="mb-3 text-center">
+            <h2 className="font-heading text-2xl font-bold uppercase tracking-wide">
+              Pick your favourite
+            </h2>
+            <p className="mt-1 font-heading text-xs text-ink/50">
+              tap an image to vote — you can change your mind until the timer
+              ends
+            </p>
+          </div>
+
+          {loading ? (
+            <p className="text-center font-heading text-sm text-ink/50">
+              loading attempts…
+            </p>
+          ) : votableAttempts.length === 0 ? (
+            <p className="text-center font-heading text-sm text-ink/50">
+              no attempts to vote on this round
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {votableAttempts.map((a) => {
+                const author = playersById[a.userId]?.name ?? "Player";
+                const selected = myVote?.targetId === a.userId;
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => handleVote(a.userId)}
+                    disabled={voteBusy}
+                    aria-pressed={selected}
+                    className={`press flex flex-col rounded-2xl border-[3px] border-ink p-2 text-left shadow-chunky-sm cursor-pointer disabled:cursor-not-allowed ${
+                      selected ? "bg-golf" : "bg-cream hover:bg-white"
+                    }`}
+                  >
+                    <div className="aspect-square overflow-hidden rounded-xl border-[3px] border-ink bg-white">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={a.imageUrl}
+                        alt={`Attempt by ${author}`}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    <div className="mt-2 flex items-center justify-between">
+                      <span className="font-heading text-xs font-bold uppercase tracking-wide">
+                        by {author}
+                      </span>
+                      {selected && (
+                        <span className="rounded-full border-2 border-ink bg-white px-1.5 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
+                          ✓ Voted
+                        </span>
+                      )}
+                    </div>
+                    <p
+                      className="mt-1 truncate font-heading text-xs text-ink/70"
+                      title={a.prompt}
+                    >
+                      {a.prompt}
+                    </p>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {voteError && (
+            <p
+              role="alert"
+              className="mt-4 rounded-xl border-[3px] border-ink bg-pink px-4 py-2 text-center font-heading text-sm font-semibold"
+            >
+              {voteError}
+            </p>
+          )}
         </Card>
+
+        {/* Target image reference */}
+        {targetImageUrl && (
+          <Card className="mb-4">
+            <h3 className="mb-3 text-center font-heading text-sm font-semibold uppercase tracking-wide text-ink/60">
+              the image they were trying to recreate
+            </h3>
+            <div className="mx-auto aspect-square w-full max-w-sm overflow-hidden rounded-2xl border-[3px] border-ink bg-cream">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={targetImageUrl}
+                alt="Target image"
+                className="h-full w-full object-cover"
+              />
+            </div>
+          </Card>
+        )}
       </div>
     </main>
   );
