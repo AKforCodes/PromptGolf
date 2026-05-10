@@ -165,6 +165,16 @@ export async function pickAttempt(
   return asJson<{ room: RoomState }>(res);
 }
 
+export async function restartRoom(code: string): Promise<{ room: RoomState }> {
+  const res = await fetch(`/api/v1/rooms/${encodeURIComponent(code)}`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "restart" }),
+  });
+  return asJson<{ room: RoomState }>(res);
+}
+
 export async function submitGeneration(
   code: string,
   prompt: string,

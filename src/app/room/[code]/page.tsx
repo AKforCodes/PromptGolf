@@ -182,6 +182,7 @@ function RoomLobby({ code }: { code: string }) {
     channel.bind("tiebreaker-intro-starting", onChange);
     channel.bind("game-intro-starting", onChange);
     channel.bind("game-ended", onChange);
+    channel.bind("game-restarted", onChange);
 
     return () => {
       const ch = channelRef.current;
@@ -487,7 +488,7 @@ function RoomLobby({ code }: { code: string }) {
 
   if (roomState.status === "ended") {
     return (
-      <EndedView roomState={roomState} userId={userId} onLeave={handleLeave} />
+      <EndedView roomState={roomState} userId={userId} onLeave={handleLeave} code={code} />
     );
   }
 
