@@ -63,26 +63,6 @@ export function selectFinalAttempts<T extends PickableAttempt>(
 // Each vote on a player's image awards them POINTS_PER_VOTE.
 export const POINTS_PER_VOTE = 10
 
-// Returns the userIds tied for the highest score, restricted to `eligible`.
-// Returns [] only when `eligible` is empty.
-// All-zero pools still return the full list — they're tied, just at 0.
-// Solo eligible players always return [self] so the server can declare them
-// the winner.
-//
-// Used at end-of-round to detect ties:
-//   - main rounds done with 2+ tied → enter tiebreaker
-//   - tiebreaker round done with 2+ still tied → another tiebreaker
-//   - exactly 1 → that player wins, game ends
-export function findTopTiedPlayers(
-  scores: Record<string, number>,
-  eligible: readonly string[]
-): string[] {
-  if (eligible.length === 0) return []
-  const list = eligible.map((uid) => ({ uid, score: scores[uid] ?? 0 }))
-  const max = Math.max(...list.map((s) => s.score))
-  return list.filter((s) => s.score === max).map((s) => s.uid)
-}
-
 // Award per-round vote counts into the cumulative scores map.
 // Each player has exactly one vote per round; each vote = POINTS_PER_VOTE
 // points to that target. `finalAttempts` is unused for scoring but retained

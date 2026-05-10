@@ -12,24 +12,16 @@ import {
   saveRoom,
   setPlayerReady,
 } from "@/lib/rooms";
+import { MIN_PLAYERS } from "@/lib/room-constants";
 import { getCategoryPrompt } from "@/lib/targets";
 import { falGenerate } from "@/lib/fal";
-import {
-  awardRoundScores,
-  findTopTiedPlayers,
-  selectFinalAttempts,
-} from "@/lib/scoring";
+import { awardRoundScores, selectFinalAttempts } from "@/lib/scoring";
 
 // Phase durations (ms). `playing` uses room.settings.timer (host-configurable).
 const PICKING_DURATION_MS = 10_000;
 const VOTING_DURATION_MS = 10_000;
 const REVEAL_DURATION_MS = 15_000;
-const TIEBREAKER_INTRO_DURATION_MS = 6_000;
 const GAME_INTRO_DURATION_MS = 6_000;
-// Hard cap on tiebreaker rounds — if the same set keeps tying for this many
-// rounds we declare them all co-winners and end the game. Prevents an
-// infinite stalemate when nobody votes.
-const MAX_TIEBREAKER_ROUNDS = 5;
 
 const JoinAction = z.object({
   action: z.literal("join"),
@@ -219,7 +211,7 @@ export async function POST(
       (p) => p.userId !== room.hostId && p.role === "prompter",
     );
     // Minimum 3 players total (host + 2 non-host prompters).
-    if (room.players.length < 3 || nonHostPrompters.length < 2) {
+    if (room.players.length < MIN_PLAYERS || nonHostPrompters.length < 2) {
       return NextResponse.json(
         { error: "need at least 3 players to start" },
         { status: 400 },
@@ -314,80 +306,17 @@ export async function POST(
     }
 
     if (room.status === "reveal") {
-      // reveal → next round, tiebreaker, OR ended.
-      const allPrompters = room.players
-        .filter((p) => p.role === "prompter")
-        .map((p) => p.userId);
-
-      // Eligible for the next tie check: if already in tiebreaker, narrow to
-      // the current tiebreakerPlayers; otherwise consider every prompter.
-      const eligible = room.tiebreakerPlayers ?? allPrompters;
-      const finalRoundReached = room.currentRound >= room.settings.rounds;
-
-      // Trigger tiebreaker when the configured rounds are done OR we're
-      // already in a tiebreaker. Otherwise just continue main rounds.
-      if (finalRoundReached || room.tiebreakerPlayers != null) {
-        const topTied = findTopTiedPlayers(room.scores, eligible);
-
-        // Hard stalemate cap: if we've burned through MAX_TIEBREAKER_ROUNDS
-        // without resolving, declare everyone in the current tied pool a
-        // co-winner and end the game. Prevents infinite-loop stalemates.
-        const tiebreakerRoundsPlayed = room.tiebreakerPlayers
-          ? room.currentRound - room.settings.rounds
-          : 0;
-        if (
-          room.tiebreakerPlayers != null &&
-          tiebreakerRoundsPlayed >= MAX_TIEBREAKER_ROUNDS &&
-          topTied.length > 1
-        ) {
-          room.status = "ended";
-          room.phaseEndsAt = null;
-          // Keep tiebreakerPlayers populated so the EndedView can label
-          // them as shared winners.
-          await saveRoom(room);
-          await pusher.trigger(`presence-room-${code}`, "game-ended", {
-            status: "ended",
-            scores: room.scores,
-            coWinners: topTied,
-            reason: "tiebreaker-stalemate",
-          });
-          return NextResponse.json({ room });
-        }
-
-        if (topTied.length <= 1) {
-          // Single leader (or nobody scored) → end the game.
-          room.status = "ended";
-          room.phaseEndsAt = null;
-          room.tiebreakerPlayers = null;
-          await saveRoom(room);
-          await pusher.trigger(`presence-room-${code}`, "game-ended", {
-            status: "ended",
-            scores: room.scores,
-          });
-          return NextResponse.json({ room });
-        }
-
-        // 2+ tied → narrow to those players and run a brief intro slideshow
-        // before generating the next round's image.
-        room.tiebreakerPlayers = topTied;
-        room.status = "tiebreaker-intro";
-        room.phaseEndsAt = Date.now() + TIEBREAKER_INTRO_DURATION_MS;
+      // reveal → next round OR ended.
+      if (room.currentRound >= room.settings.rounds) {
+        room.status = "ended";
+        room.phaseEndsAt = null;
         await saveRoom(room);
-        await pusher.trigger(`presence-room-${code}`, "tiebreaker-intro-starting", {
-          status: "tiebreaker-intro",
-          round: room.currentRound,
-          phaseEndsAt: room.phaseEndsAt,
-          tiebreakerPlayers: topTied,
+        await pusher.trigger(`presence-room-${code}`, "game-ended", {
+          status: "ended",
+          scores: room.scores,
         });
         return NextResponse.json({ room });
       }
-
-      // Normal main-round progression.
-      return generateRoundTarget(room, code);
-    }
-
-    if (room.status === "tiebreaker-intro") {
-      // Intro slideshow elapsed → generate the actual tiebreaker round.
       return generateRoundTarget(room, code);
     }
 
@@ -472,7 +401,6 @@ export async function POST(
     room.scores = {};
     room.picks = {};
     room.phaseEndsAt = null;
-    room.tiebreakerPlayers = null;
     room.players = room.players.map((p) => ({ ...p, ready: false }));
 
     await saveRoom(room);

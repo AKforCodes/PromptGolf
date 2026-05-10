@@ -407,12 +407,6 @@ describe("setPlayerReady", () => {
 })
 
 describe("createRoom — defaults", () => {
-  it("initialises tiebreakerPlayers to null", async () => {
-    const { createRoom } = await import("../rooms")
-    const room = await createRoom(mockSettings, host)
-    expect(room.tiebreakerPlayers).toBeNull()
-  })
-
   it("uses a 4-character code with no ambiguous glyphs", async () => {
     const { createRoom } = await import("../rooms")
     const allowed = /^[ABCDEFGHJKLMNPQRSTUVWXYZ23456789]{4}$/
