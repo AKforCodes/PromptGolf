@@ -33,6 +33,7 @@ import { JoinPrompt } from "@/components/lobby/join-prompt";
 import { PlayersCard } from "@/components/lobby/players-card";
 import { RoundSummaryCard } from "@/components/lobby/round-summary-card";
 import { ShareCard } from "@/components/lobby/share-card";
+import { MicPermissionButton } from "@/components/lobby/mic-permission-button";
 import { PlayingView } from "@/components/play/playing-view";
 import { SpectatorView } from "@/components/play/spectator-view";
 import { RoundLoadingView } from "@/components/play/round-loading-view";
@@ -550,6 +551,7 @@ function RoomLobby({ code }: { code: string }) {
               {startError}
             </p>
           )}
+          <MicPermissionButton />
           <p className="text-center font-heading text-xs text-ink/50">
             share the room code or link so friends can join
           </p>
