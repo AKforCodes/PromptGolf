@@ -32,10 +32,11 @@ import { Button } from "@/components/jklm/button";
 import { Card } from "@/components/jklm/card";
 import { GameSetupCard } from "@/components/lobby/game-setup-card";
 import { JoinPrompt } from "@/components/lobby/join-prompt";
-import { PlayersCard } from "@/components/lobby/players-card";
+import { LobbyPlayersList } from "@/components/lobby/lobby-players-list";
+import { PresetGrid } from "@/components/lobby/preset-grid";
 import { RoundSummaryCard } from "@/components/lobby/round-summary-card";
-import { ShareCard } from "@/components/lobby/share-card";
 import { MicPermissionButton } from "@/components/lobby/mic-permission-button";
+import { applyPreset } from "@/lib/presets";
 import { PlayingView } from "@/components/play/playing-view";
 import { SpectatorView } from "@/components/play/spectator-view";
 import { RoundLoadingView } from "@/components/play/round-loading-view";
@@ -491,74 +492,275 @@ function RoomLobby({ code }: { code: string }) {
   }
 
   return (
-    <main className="flex flex-1 flex-col px-4 py-8">
-      <div className="mx-auto w-full max-w-3xl">
-        <div className="mb-6 flex items-center justify-between">
-          <Button variant="neutral" size="sm" onClick={handleLeave}>
+    <LobbyView
+      code={code}
+      shareUrl={shareUrl}
+      roomState={roomState}
+      userId={userId}
+      isHost={isHost}
+      isSpectator={isSpectator}
+      myReady={myReady}
+      readyBusy={readyBusy}
+      readyCount={readyCount}
+      allReady={allReady}
+      nonHostPromptersCount={nonHostPrompters.length}
+      canStart={canStart}
+      startError={startError}
+      roundError={roundError}
+      settings={settings}
+      onUpdate={update}
+      onApplyPreset={(presetId) => {
+        if (!isHost) return;
+        setLocalSettings((s) => applyPreset(s ?? settings, presetId));
+      }}
+      onReadyToggle={handleReadyToggle}
+      onStart={handleStart}
+      onLeave={handleLeave}
+    />
+  );
+}
+
+// --- Lobby view (extracted for clarity) ---
+
+type SettingsTab = "presets" | "custom";
+
+interface LobbyViewProps {
+  code: string;
+  shareUrl: string;
+  roomState: RoomState;
+  userId: string;
+  isHost: boolean;
+  isSpectator: boolean;
+  myReady: boolean;
+  readyBusy: boolean;
+  readyCount: number;
+  allReady: boolean;
+  nonHostPromptersCount: number;
+  canStart: boolean;
+  startError: string | null;
+  roundError: string | null;
+  settings: RoomSettings;
+  onUpdate: <K extends keyof RoomSettings>(key: K, value: RoomSettings[K]) => void;
+  onApplyPreset: (presetId: string) => void;
+  onReadyToggle: () => void;
+  onStart: () => void;
+  onLeave: () => void;
+}
+
+function LobbyView(props: LobbyViewProps) {
+  const {
+    code,
+    shareUrl,
+    roomState,
+    userId,
+    isHost,
+    isSpectator,
+    myReady,
+    readyBusy,
+    readyCount,
+    allReady,
+    nonHostPromptersCount,
+    canStart,
+    startError,
+    roundError,
+    settings,
+    onUpdate,
+    onApplyPreset,
+    onReadyToggle,
+    onStart,
+    onLeave,
+  } = props;
+
+  const [tab, setTab] = useState<SettingsTab>("presets");
+  const [copied, setCopied] = useState(false);
+
+  const copyInvite = useCallback(async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch (err) {
+      console.error("clipboard failed:", err);
+    }
+  }, [shareUrl]);
+
+  const startLabel =
+    roomState.players.length < MIN_PLAYERS
+      ? `Need ${MIN_PLAYERS - roomState.players.length} more`
+      : !allReady
+        ? `${readyCount}/${nonHostPromptersCount} ready`
+        : "▶ Start Game";
+
+  return (
+    <main className="relative flex flex-1 flex-col overflow-hidden px-4 pb-6 pt-4">
+      {/* Backdrop */}
+      <div
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background:
+            "radial-gradient(ellipse at top, rgba(34,197,94,0.18), transparent 55%), radial-gradient(ellipse at bottom right, rgba(250,204,21,0.14), transparent 55%)",
+        }}
+      />
+      <div
+        aria-hidden="true"
+        className="halftone pointer-events-none absolute inset-0 opacity-50"
+      />
+
+      <div className="relative z-10 mx-auto flex w-full max-w-7xl flex-1 flex-col">
+        {/* Top bar */}
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <Button variant="neutral" size="sm" onClick={onLeave}>
             ← Leave
           </Button>
-          <div className="font-heading text-xl">⛳️ PROMPT GOLF</div>
+
+          {/* Big room code badge — clickable to copy */}
+          <button
+            type="button"
+            onClick={copyInvite}
+            disabled={!shareUrl}
+            title={copied ? "Copied!" : "Click to copy invite link"}
+            className="press group inline-flex items-center gap-3 rounded-2xl border-[3px] border-ink bg-sun px-4 py-2 shadow-chunky-sm cursor-pointer disabled:cursor-not-allowed"
+          >
+            <span className="flex flex-col items-start leading-none">
+              <span className="font-heading text-[9px] font-bold uppercase tracking-wide text-ink/55">
+                room code
+              </span>
+              <span className="mt-0.5 font-heading text-2xl font-extrabold tabular-nums tracking-[0.4em] sm:text-3xl">
+                {code}
+              </span>
+            </span>
+            <span
+              aria-hidden="true"
+              className="rounded-full border-2 border-ink bg-white px-1.5 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide"
+            >
+              {copied ? "✓ copied" : "🔗 copy"}
+            </span>
+          </button>
         </div>
 
-        <ShareCard code={code} shareUrl={shareUrl} />
+        {/* Two-zone layout */}
+        <div className="grid flex-1 grid-cols-1 gap-4 lg:grid-cols-12">
+          {/* LEFT — Players */}
+          <div className="lg:col-span-4">
+            <LobbyPlayersList
+              players={roomState.players}
+              hostId={roomState.hostId}
+              selfId={userId}
+              maxPlayers={settings.maxPlayers}
+            />
+          </div>
 
-        {isHost ? (
-          <GameSetupCard settings={settings} onChange={update} />
-        ) : (
-          <RoundSummaryCard settings={settings} />
-        )}
+          {/* RIGHT — Settings (host) or Read-only summary (non-host) */}
+          <div className="lg:col-span-8">
+            {isHost ? (
+              <Card className="flex h-full flex-col p-4 sm:p-5">
+                {/* Tabs */}
+                <div
+                  role="tablist"
+                  aria-label="Settings mode"
+                  className="mb-4 grid grid-cols-2 gap-1 rounded-2xl border-[3px] border-ink bg-cream p-1"
+                >
+                  <button
+                    role="tab"
+                    type="button"
+                    aria-selected={tab === "presets"}
+                    onClick={() => setTab("presets")}
+                    className={`press rounded-xl border-2 py-2 font-heading text-sm font-extrabold uppercase tracking-wide cursor-pointer transition ${
+                      tab === "presets"
+                        ? "border-ink bg-golf shadow-chunky-sm"
+                        : "border-transparent text-ink/60"
+                    }`}
+                  >
+                    ⚡ Presets
+                  </button>
+                  <button
+                    role="tab"
+                    type="button"
+                    aria-selected={tab === "custom"}
+                    onClick={() => setTab("custom")}
+                    className={`press rounded-xl border-2 py-2 font-heading text-sm font-extrabold uppercase tracking-wide cursor-pointer transition ${
+                      tab === "custom"
+                        ? "border-ink bg-sun shadow-chunky-sm"
+                        : "border-transparent text-ink/60"
+                    }`}
+                  >
+                    ⚙ Custom Settings
+                  </button>
+                </div>
 
-        <PlayersCard
-          players={players}
-          hostId={roomState.hostId}
-          selfId={userId}
-          maxPlayers={settings.maxPlayers}
-        />
+                <div className="flex-1 overflow-y-auto px-1 py-1">
+                  {tab === "presets" ? (
+                    <PresetGrid
+                      settings={settings}
+                      onApply={onApplyPreset}
+                    />
+                  ) : (
+                    <GameSetupCard
+                      settings={settings}
+                      onChange={onUpdate}
+                      bare
+                    />
+                  )}
+                </div>
+              </Card>
+            ) : (
+              <div className="flex h-full flex-col gap-4">
+                <div className="rounded-2xl border-[3px] border-dashed border-ink/40 bg-white/70 p-3 text-center backdrop-blur">
+                  <p className="font-heading text-xs font-bold uppercase tracking-wide text-ink/55">
+                    🎮 Host is setting up the game
+                  </p>
+                  <p className="mt-1 font-heading text-[11px] text-ink/45">
+                    here&apos;s what you&apos;ll be playing
+                  </p>
+                </div>
+                <RoundSummaryCard settings={settings} />
+              </div>
+            )}
+          </div>
+        </div>
 
-        <div className="flex flex-col gap-3">
+        {/* Bottom action bar */}
+        <div className="mt-4 flex flex-col items-stretch gap-2 rounded-2xl border-[3px] border-ink bg-white/90 p-3 shadow-chunky-sm backdrop-blur sm:flex-row sm:items-center">
+          <MicPermissionButton />
           {!isHost && !isSpectator && (
             <Button
               variant={myReady ? "primary" : "secondary"}
-              size="lg"
+              size="md"
               full
-              onClick={handleReadyToggle}
+              onClick={onReadyToggle}
               disabled={readyBusy}
             >
-              {myReady ? "✓ Ready" : "Tap to Ready Up"}
+              {myReady ? "✓ Ready" : "Ready Up"}
             </Button>
           )}
           {isHost && (
             <Button
               variant="primary"
-              size="lg"
+              size="md"
               full
-              onClick={handleStart}
+              onClick={onStart}
               disabled={!canStart}
             >
-              {players.length < MIN_PLAYERS
-                ? `Waiting for players… ${readyCount}/${players.length} ready`
-                : !allReady
-                  ? `${readyCount}/${nonHostPrompters.length} ready`
-                  : "Start Round"}
+              {startLabel}
             </Button>
           )}
-          {(startError || roundError) && (
-            <p
-              role="alert"
-              className="rounded-xl border-[3px] border-ink bg-pink px-4 py-2 text-center font-heading text-sm font-semibold"
-            >
-              {startError ?? roundError}
-            </p>
-          )}
-          <MicPermissionButton />
-          <p className="text-center font-heading text-xs text-ink/50">
-            share the room code or link so friends can join
-          </p>
         </div>
+
+        {(startError || roundError) && (
+          <p
+            role="alert"
+            className="mt-3 rounded-xl border-[3px] border-ink bg-pink px-4 py-2 text-center font-heading text-sm font-semibold"
+          >
+            {startError ?? roundError}
+          </p>
+        )}
       </div>
     </main>
   );
 }
+
 
 export default function RoomPage({ params }: RoomPageProps) {
   const { code } = use(params);

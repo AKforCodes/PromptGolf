@@ -666,7 +666,7 @@ export function RevealView({ roomState, userId, onLeave }: PhaseProps) {
         className="pointer-events-none absolute inset-0"
         style={{
           background:
-            "radial-gradient(ellipse at top, rgba(244,114,182,0.22), transparent 55%), radial-gradient(ellipse at bottom, rgba(34,197,94,0.15), transparent 55%)",
+            "radial-gradient(ellipse at top, rgba(168,85,247,0.22), transparent 55%), radial-gradient(ellipse at bottom, rgba(250,204,21,0.15), transparent 55%)",
         }}
       />
 
@@ -677,7 +677,7 @@ export function RevealView({ roomState, userId, onLeave }: PhaseProps) {
             ← Leave
           </Button>
           <div className="flex items-center gap-1.5 rounded-full border-[3px] border-ink bg-white px-2 py-1 shadow-chunky-sm">
-            <span className="rounded-full border-2 border-ink bg-pink px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
+            <span className="rounded-full border-2 border-ink bg-purple px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
               ✨ Reveal
             </span>
             <span className="rounded-full border-2 border-ink bg-golf px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide tabular-nums">
@@ -755,7 +755,7 @@ export function RevealView({ roomState, userId, onLeave }: PhaseProps) {
             }}
             className="relative"
           >
-            <span className="absolute -top-3 left-4 z-10 rounded-full border-[3px] border-ink bg-pink px-3 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide shadow-chunky-sm">
+            <span className="absolute -top-3 left-4 z-10 rounded-full border-[3px] border-ink bg-purple px-3 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide shadow-chunky-sm">
               🤫 Secret prompt
             </span>
             <Card className="flex h-full min-h-[12rem] flex-col justify-center p-6">
@@ -1064,7 +1064,7 @@ function PodiumColumn({
   }
 
   return (
-    <div className="flex flex-1 max-w-[10rem] flex-col items-center">
+    <div className="flex flex-1 max-w-[7rem] flex-col items-center sm:max-w-[10rem]">
       <motion.div
         initial={reduce ? false : { y: 12, opacity: 0 }}
         animate={{ y: 0, opacity: 1 }}

@@ -25,20 +25,27 @@ import { Stepper } from "@/components/jklm/stepper";
 interface GameSetupCardProps {
   settings: RoomSettings;
   onChange: <K extends keyof RoomSettings>(key: K, value: RoomSettings[K]) => void;
+  /** When true, renders without the outer Card wrapper / heading row.
+   *  Use when nesting inside another Card/panel to avoid double borders. */
+  bare?: boolean;
 }
 
-export function GameSetupCard({ settings, onChange }: GameSetupCardProps) {
+export function GameSetupCard({ settings, onChange, bare = false }: GameSetupCardProps) {
   const { playBubble } = useSoundEffect();
+  const Wrapper: React.ElementType = bare ? "div" : Card;
+  const wrapperProps = bare ? {} : { className: "mb-6" };
   return (
-    <Card className="mb-6">
-      <div className="mb-5 flex items-baseline justify-between">
-        <h2 className="font-heading text-2xl font-bold uppercase tracking-wide">
-          Game Setup
-        </h2>
-        <span className="rounded-full border-[3px] border-ink bg-golf px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
-          Showdown
-        </span>
-      </div>
+    <Wrapper {...wrapperProps}>
+      {!bare && (
+        <div className="mb-5 flex items-baseline justify-between">
+          <h2 className="font-heading text-2xl font-bold uppercase tracking-wide">
+            Game Setup
+          </h2>
+          <span className="rounded-full border-[3px] border-ink bg-golf px-2 py-0.5 font-heading text-[10px] font-bold uppercase tracking-wide">
+            Showdown
+          </span>
+        </div>
+      )}
 
       {/* Category */}
       <fieldset className="mb-6">
@@ -234,6 +241,6 @@ export function GameSetupCard({ settings, onChange }: GameSetupCardProps) {
           })}
         </div>
       </fieldset>
-    </Card>
+    </Wrapper>
   );
 }

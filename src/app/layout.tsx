@@ -3,6 +3,7 @@ import { Fredoka, Inter } from "next/font/google";
 import "./globals.css";
 import { BackgroundMusic } from "@/components/background-music";
 import { SoundProvider } from "@/components/sound-provider";
+import { CustomCursor } from "@/components/custom-cursor";
 
 const fredoka = Fredoka({
   variable: "--font-fredoka",
@@ -34,6 +35,7 @@ export default function RootLayout({
         <SoundProvider>
           {children}
           <BackgroundMusic />
+          <CustomCursor />
         </SoundProvider>
       </body>
     </html>

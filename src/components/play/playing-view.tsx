@@ -482,7 +482,7 @@ export function PlayingView({
                         }
                         aria-label="Your prompt"
                         maxLength={settings.promptMaxLength + 50}
-                        className="min-h-36 w-full resize-none rounded-2xl border-[3px] border-ink bg-cream px-5 py-4 pr-24 font-heading text-2xl leading-snug outline-none transition focus:bg-white focus:shadow-chunky-sm disabled:opacity-60"
+                        className="min-h-32 w-full resize-none rounded-2xl border-[3px] border-ink bg-cream px-4 py-3 pr-20 font-heading text-lg leading-snug outline-none transition focus:bg-white focus:shadow-chunky-sm disabled:opacity-60 sm:min-h-36 sm:px-5 sm:py-4 sm:pr-24 sm:text-2xl"
                         autoFocus
                       />
                       <span
@@ -627,7 +627,7 @@ export function PlayingView({
                           },
                         }}
                         whileHover={reduce ? undefined : { y: -3 }}
-                        className="group relative w-40 shrink-0 snap-start overflow-hidden rounded-2xl border-[3px] border-ink bg-white shadow-chunky-sm transition-shadow hover:shadow-chunky"
+                        className="group relative w-32 shrink-0 snap-start overflow-hidden rounded-2xl border-[3px] border-ink bg-white shadow-chunky-sm transition-shadow hover:shadow-chunky sm:w-40"
                       >
                         <div className="relative aspect-square overflow-hidden border-b-[3px] border-ink bg-cream">
                           {/* eslint-disable-next-line @next/next/no-img-element */}

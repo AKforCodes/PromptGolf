@@ -104,7 +104,7 @@ function PlayerTile({ player: p, isYou, isHost }: PlayerTileProps) {
     >
       {isHost && (
         <span
-          className="absolute -top-2 -right-2 z-10 grid h-7 w-7 place-items-center rounded-full border-[3px] border-ink bg-sun text-sm shadow-chunky-sm"
+          className="absolute -top-2 -right-2 z-10 grid h-7 w-7 place-items-center rounded-full border-[3px] border-ink bg-orange text-sm shadow-chunky-sm"
           aria-label="Host"
           title="Host"
         >
