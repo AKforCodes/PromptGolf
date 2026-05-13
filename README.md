@@ -1,4 +1,4 @@
-# Prompt Golf ⛳️
+# Prompt Golf ⛳️- 1st Place Hackathon Winners👑
 
 Jackbox-style party game. Players see a target image, then race to write prompts that recreate it using AI image generation. After the round, everyone votes for the image they think is closest to the target — most votes wins.
 
